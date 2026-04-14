@@ -38,10 +38,17 @@ function getHexPoints(x: number, y: number) {
 }
 
 // Color tiles based on terrain + ownership
-function getColor(owner: number | null, terrain: string) {
-  if (terrain === "water") return "#1e3a8a"; // water is non-playable
-  if (owner === 1) return "#f87171"; // player owned
-  return "#ffffff"; // neutral land
+function getColor(owner: number | null, terrain: string, units: number) {
+  if (terrain === "water") return "#1e3a8a";
+
+  if (owner === 1) {
+    // scale red intensity based on units
+    const intensity = Math.floor((units / STORAGE_CAP) * 255);
+    return `rgb(${150 + intensity / 2}, ${100}, ${100})`;
+  }
+
+  // neutral tiles
+  return "#ffffff";
 }
 
 // Determine which tiles are valid move targets from the selected tile
@@ -78,21 +85,26 @@ function applyTick(tiles: Tile[]): Tile[] {
 }
 
 // Apply movement from one tile to another
-function applyMove(tiles: Tile[], from: string, to: string): Tile[] {
+function applyMove(
+  tiles: Tile[],
+  from: string,
+  to: string,
+  amount: number,
+): Tile[] {
   const [fromQ, fromR] = from.split(",").map(Number);
   const [toQ, toR] = to.split(",").map(Number);
 
   return tiles.map((t) => {
     // Source tile
     if (t.q === fromQ && t.r === fromR) {
-      return { ...t, units: t.units - 1 };
+      return { ...t, units: t.units - amount };
     }
 
     // Destination tile
     if (t.q === toQ && t.r === toR) {
       return {
         ...t,
-        units: Math.min(t.units + 1, STORAGE_CAP),
+        units: t.units + amount,
         owner: t.owner ?? 1,
       };
     }
@@ -180,7 +192,7 @@ export default function HexGrid() {
                     ? "orange"
                     : isValidMove
                       ? "#fde68a"
-                      : getColor(owner, terrain)
+                      : getColor(owner, terrain, units)
                 }
                 stroke="black"
                 onClick={() => {
@@ -216,9 +228,18 @@ export default function HexGrid() {
                     // Rule 2: destination must not be full
                     if (target.units >= STORAGE_CAP) return;
 
-                    setTiles((prev) =>
-                      prev ? applyMove(prev, selected, key) : prev,
-                    );
+                    const movableUnits = source.units - 1;
+                    const spaceAvailable = STORAGE_CAP - target.units;
+
+                    const amountToMove = Math.min(movableUnits, spaceAvailable);
+
+                    if (amountToMove > 0) {
+                      setTiles((prev) =>
+                        prev
+                          ? applyMove(prev, selected, key, amountToMove)
+                          : prev,
+                      );
+                    }
 
                     setSelected(null);
                     return;
