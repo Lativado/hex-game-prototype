@@ -5,6 +5,8 @@ import { generateGrid } from "../lib/hexGrid";
 import { Tile } from "@/types/tile";
 
 const HEX_SIZE = 30;
+const PRODUCTION_CAP = 20;
+const STORAGE_CAP = 30;
 
 // Axial direction vectors for hex neighbors
 const directions = [
@@ -68,7 +70,7 @@ function getValidMoves(tiles: Tile[], selected: string | null): Set<string> {
 // Apply one game tick: grow units on owned land tiles up to a cap
 function applyTick(tiles: Tile[]): Tile[] {
   return tiles.map((t) => {
-    if (t.owner === 1 && t.terrain !== "water" && t.units < 20) {
+    if (t.owner === 1 && t.terrain !== "water" && t.units < PRODUCTION_CAP) {
       return { ...t, units: t.units + 1 };
     }
     return t;
@@ -81,16 +83,16 @@ function applyMove(tiles: Tile[], from: string, to: string): Tile[] {
   const [toQ, toR] = to.split(",").map(Number);
 
   return tiles.map((t) => {
-    // Require at least 2 units so tiles cannot be drained to zero
-    if (t.q === fromQ && t.r === fromR && t.units > 1) {
+    // Source tile
+    if (t.q === fromQ && t.r === fromR) {
       return { ...t, units: t.units - 1 };
     }
 
-    // Destination tile gains unit and may be claimed if neutral
+    // Destination tile
     if (t.q === toQ && t.r === toR) {
       return {
         ...t,
-        units: t.units + 1,
+        units: Math.min(t.units + 1, STORAGE_CAP),
         owner: t.owner ?? 1,
       };
     }
@@ -199,9 +201,25 @@ export default function HexGrid() {
 
                   // Move if valid
                   if (validMoves.has(key)) {
+                    const [fromQ, fromR] = selected.split(",").map(Number);
+
+                    const source = tiles.find(
+                      (t) => t.q === fromQ && t.r === fromR,
+                    );
+                    const target = tiles.find((t) => t.q === q && t.r === r);
+
+                    if (!source || !target) return;
+
+                    // Rule 1: must have enough units to move
+                    if (source.units <= 1) return;
+
+                    // Rule 2: destination must not be full
+                    if (target.units >= STORAGE_CAP) return;
+
                     setTiles((prev) =>
                       prev ? applyMove(prev, selected, key) : prev,
                     );
+
                     setSelected(null);
                     return;
                   }
