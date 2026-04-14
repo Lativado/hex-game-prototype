@@ -144,7 +144,8 @@ function runBotTurn(tiles: Tile[]): Tile[] {
 
   if (neighbors.length === 0) return tiles;
 
-  const target = neighbors[Math.floor(Math.random() * neighbors.length)];
+  neighbors.sort((a, b) => a.units - b.units);
+  const target = neighbors[0];
 
   const movable = source.units - 1;
   const space = STORAGE_CAP - target.units;
@@ -304,7 +305,11 @@ export default function HexGrid() {
                     return;
                   }
 
-                  if (owner === 1) setSelected(key);
+                  // Allow switching selection to another owned tile anytime
+                  if (owner === 1 && key !== selected) {
+                    setSelected(key);
+                    return;
+                  }
                 }}
                 style={{ cursor: "pointer" }}
               />
