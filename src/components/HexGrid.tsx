@@ -102,11 +102,31 @@ function applyMove(
 
     // Destination tile
     if (t.q === toQ && t.r === toR) {
-      return {
-        ...t,
-        units: t.units + amount,
-        owner: t.owner ?? 1,
-      };
+      const attack = amount;
+
+      // Friendly tile → merge
+      if (t.owner === 1) {
+        return {
+          ...t,
+          units: t.units + attack,
+        };
+      }
+
+      const defenseMultiplier = t.owner === null ? 0.7 : 1.0;
+      const effectiveDefense = Math.floor(t.units * defenseMultiplier);
+
+      if (attack > effectiveDefense) {
+        return {
+          ...t,
+          units: attack - effectiveDefense,
+          owner: 1,
+        };
+      } else {
+        return {
+          ...t,
+          units: t.units - attack,
+        };
+      }
     }
 
     return t;
