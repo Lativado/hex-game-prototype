@@ -103,6 +103,8 @@ export default function HexGrid() {
   const [tiles, setTiles] = useState<Tile[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const selectedTile =
+    tiles && selected ? tiles.find((t) => `${t.q},${t.r}` === selected) : null;
 
   function resetGame() {
     localStorage.removeItem("tiles");
@@ -144,11 +146,21 @@ export default function HexGrid() {
 
   return (
     <div>
-      <button onClick={runTick}>Run Tick</button>
-      <button onClick={resetGame} style={{ marginLeft: "10px" }}>
+      <button
+        className="px-3 py-1 border border-gray-400 bg-gray-200 text-gray-900 rounded hover:bg-gray-300"
+        onClick={runTick}
+      >
+        Run Tick
+      </button>
+      <button
+        className="px-3 py-1 border border-gray-400 bg-gray-200 text-gray-900 rounded hover:bg-gray-300"
+        onClick={resetGame}
+        style={{
+          marginLeft: "10px",
+        }}
+      >
         Reset Game
       </button>
-
       <svg width={600} height={600} style={{ border: "1px solid gray" }}>
         {tiles.map((tile) => {
           const { q, r, owner, units, terrain } = tile;
@@ -216,6 +228,26 @@ export default function HexGrid() {
           );
         })}
       </svg>
+      {selectedTile && (
+        <div
+          style={{
+            marginBottom: "10px",
+            padding: "8px",
+            border: "1px solid gray",
+            maxWidth: "300px",
+          }}
+        >
+          <div>
+            <strong>Tile</strong>
+          </div>
+          <div>
+            Coords: {selectedTile.q}, {selectedTile.r}
+          </div>
+          <div>Owner: {selectedTile.owner ?? "none"}</div>
+          <div>Units: {selectedTile.units}</div>
+          <div>Terrain: {selectedTile.terrain}</div>
+        </div>
+      )}
     </div>
   );
 }
