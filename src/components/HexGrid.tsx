@@ -83,51 +83,42 @@ export default function HexGrid() {
               }
               stroke="black"
               onClick={() => {
-                if (!selected) {
-                  // nothing selected → select this tile
-                  setSelected(key);
+                // Block water tiles completely
+                if (tile.terrain === "water") {
                   return;
                 }
 
+                // No tile selected yet → only allow selecting owned tiles
+                if (!selected) {
+                  if (owner === 1) {
+                    setSelected(key);
+                  }
+                  return;
+                }
+
+                // Clicking the same tile → deselect
                 if (selected === key) {
-                  // clicking same tile → deselect
                   setSelected(null);
                   return;
                 }
 
-                const [fromQ, fromR] = selected.split(",").map(Number);
-
-                const sourceTile = tiles.find(
-                  (t) => t.q === fromQ && t.r === fromR,
-                );
-
-                if (!sourceTile || sourceTile.owner !== 1) {
-                  setSelected(key);
-                  return;
-                }
-
+                // Move units if this is a valid move
                 if (validMoves.has(key)) {
                   const [fromQ, fromR] = selected.split(",").map(Number);
 
-                  const targetTile = tiles.find((t) => t.q === q && t.r === r);
-
-                  if (!targetTile || targetTile.terrain === "water") {
-                    return; // block movement
-                  }
-
                   setTiles((prev) =>
                     prev.map((t) => {
-                      // source tile
+                      // Source tile
                       if (t.q === fromQ && t.r === fromR && t.units > 0) {
                         return { ...t, units: t.units - 1 };
                       }
 
-                      // destination tile
+                      // Destination tile
                       if (t.q === q && t.r === r) {
                         return {
                           ...t,
                           units: t.units + 1,
-                          owner: t.owner ?? 1, // claim if neutral
+                          owner: t.owner ?? 1,
                         };
                       }
 
@@ -139,8 +130,10 @@ export default function HexGrid() {
                   return;
                 }
 
-                // clicked non-valid move → just switch selection
-                setSelected(key);
+                // Allow switching selection only to owned tiles
+                if (owner === 1) {
+                  setSelected(key);
+                }
               }}
               style={{ cursor: "pointer" }}
             />
