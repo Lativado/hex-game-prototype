@@ -3,4 +3,5 @@ export type Tile = {
   r: number;
   owner: number | null;
   units: number;
+  terrain: "land" | "water";
 };

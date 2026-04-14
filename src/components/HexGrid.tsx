@@ -31,9 +31,10 @@ function getHexPoints(x: number, y: number) {
   return points.join(" ");
 }
 
-function getColor(owner: number | null) {
-  if (owner === 1) return "#f87171";
-  return "#93c5fd";
+function getColor(owner: number | null, terrain: string) {
+  if (terrain === "water") return "#1e3a8a"; // deep blue
+  if (owner === 1) return "#f87171"; // red
+  return "#ffffff"; // neutral = white
 }
 
 export default function HexGrid() {
@@ -43,13 +44,20 @@ export default function HexGrid() {
 
   const selectedCoords = selected ? selected.split(",").map(Number) : null;
 
-  const neighborSet = new Set<string>();
+  const validMoves = new Set<string>();
 
   if (selectedCoords) {
     const [q, r] = selectedCoords;
 
     directions.forEach(([dq, dr]) => {
-      neighborSet.add(`${q + dq},${r + dr}`);
+      const nq = q + dq;
+      const nr = r + dr;
+
+      const tile = tiles.find((t) => t.q === nq && t.r === nr);
+
+      if (tile && tile.terrain !== "water") {
+        validMoves.add(`${nq},${nr}`);
+      }
     });
   }
 
@@ -60,14 +68,18 @@ export default function HexGrid() {
         const { x, y } = hexToPixel(q, r);
         const key = `${q},${r}`;
         const isSelected = selected === key;
-        const isNeighbor = neighborSet.has(key);
+        const isValidMove = validMoves.has(key);
 
         return (
           <g key={key}>
             <polygon
               points={getHexPoints(x + 300, y + 300)}
               fill={
-                isSelected ? "orange" : isNeighbor ? "#fde68a" : getColor(owner)
+                isSelected
+                  ? "orange"
+                  : isValidMove
+                    ? "#fde68a"
+                    : getColor(owner, tile.terrain)
               }
               stroke="black"
               onClick={() => {
@@ -83,10 +95,25 @@ export default function HexGrid() {
                   return;
                 }
 
-                if (neighborSet.has(key)) {
-                  // move 1 unit from selected → this tile
+                const [fromQ, fromR] = selected.split(",").map(Number);
 
+                const sourceTile = tiles.find(
+                  (t) => t.q === fromQ && t.r === fromR,
+                );
+
+                if (!sourceTile || sourceTile.owner !== 1) {
+                  setSelected(key);
+                  return;
+                }
+
+                if (validMoves.has(key)) {
                   const [fromQ, fromR] = selected.split(",").map(Number);
+
+                  const targetTile = tiles.find((t) => t.q === q && t.r === r);
+
+                  if (!targetTile || targetTile.terrain === "water") {
+                    return; // block movement
+                  }
 
                   setTiles((prev) =>
                     prev.map((t) => {
@@ -112,7 +139,7 @@ export default function HexGrid() {
                   return;
                 }
 
-                // clicked non-neighbor → just switch selection
+                // clicked non-valid move → just switch selection
                 setSelected(key);
               }}
               style={{ cursor: "pointer" }}
