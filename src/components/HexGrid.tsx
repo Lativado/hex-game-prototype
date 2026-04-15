@@ -8,7 +8,6 @@ const HEX_SIZE = 30;
 const PRODUCTION_CAP = 20;
 const STORAGE_CAP = 30;
 
-// Centralized button styling
 const BTN =
   "px-3 py-1 border border-gray-400 bg-gray-200 text-gray-900 rounded hover:bg-gray-300";
 
@@ -20,6 +19,22 @@ const directions = [
   [-1, 1],
   [0, 1],
 ];
+
+// ------------------------------
+// Types
+// ------------------------------
+
+type PendingMove = {
+  from: { q: number; r: number };
+  to: { q: number; r: number };
+  amount: number;
+  owner: number;
+  resolvesAt: number;
+};
+
+// ------------------------------
+// Helpers
+// ------------------------------
 
 function hexToPixel(q: number, r: number) {
   const x = HEX_SIZE * (Math.sqrt(3) * q + (Math.sqrt(3) / 2) * r);
@@ -78,19 +93,107 @@ function applyTick(tiles: Tile[]): Tile[] {
   });
 }
 
+// ------------------------------
+// Core Systems (Automation-ready)
+// ------------------------------
+
+function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
+  let next = [...tiles];
+
+  const groups = new Map<string, PendingMove[]>();
+
+  moves.forEach((m) => {
+    const key = `${m.to.q},${m.to.r}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(m);
+  });
+
+  groups.forEach((groupMoves) => {
+    const { q, r } = groupMoves[0].to;
+    const target = next.find((t) => t.q === q && t.r === r);
+    if (!target) return;
+
+    const attacksByOwner = new Map<number, number>();
+
+    groupMoves.forEach((m) => {
+      attacksByOwner.set(
+        m.owner,
+        (attacksByOwner.get(m.owner) || 0) + m.amount,
+      );
+    });
+
+    const [attackerOwner, attackPower] = Array.from(
+      attacksByOwner.entries(),
+    ).sort((a, b) => b[1] - a[1])[0];
+
+    let newUnits: number;
+    let newOwner = target.owner;
+
+    if (target.owner === attackerOwner) {
+      newUnits = target.units + attackPower;
+    } else {
+      const defenseMultiplier = target.owner === null ? 0.7 : 1.0;
+      const defense = Math.floor(target.units * defenseMultiplier);
+
+      if (attackPower >= defense) {
+        newUnits = attackPower - defense;
+        newOwner = attackerOwner;
+      } else {
+        newUnits = target.units - attackPower;
+        if (newUnits <= 0) {
+          newUnits = 0;
+          newOwner = attackerOwner;
+        }
+      }
+    }
+
+    newUnits = Math.min(STORAGE_CAP, Math.max(0, newUnits));
+
+    next = next.map((t) =>
+      t.q === q && t.r === r ? { ...t, units: newUnits, owner: newOwner } : t,
+    );
+  });
+
+  return next;
+}
+
+function getBotMove(tiles: Tile[], currentTick: number): PendingMove | null {
+  const enemyTiles = tiles.filter((t) => t.owner === 2 && t.units > 1);
+  if (enemyTiles.length === 0) return null;
+
+  const source = enemyTiles[Math.floor(Math.random() * enemyTiles.length)];
+
+  const neighbors = directions
+    .map(([dq, dr]) =>
+      tiles.find((t) => t.q === source.q + dq && t.r === source.r + dr),
+    )
+    .filter((t): t is Tile => !!t && t.terrain !== "water" && t.owner !== 2);
+
+  if (neighbors.length === 0) return null;
+
+  neighbors.sort((a, b) => a.units - b.units);
+  const target = neighbors[0];
+
+  const amount = source.units - 1;
+  if (amount <= 0) return null;
+
+  return {
+    from: { q: source.q, r: source.r },
+    to: { q: target.q, r: target.r },
+    amount,
+    owner: 2,
+    resolvesAt: currentTick + 1,
+  };
+}
+
+// ------------------------------
+// Component
+// ------------------------------
+
 export default function HexGrid() {
   const [tiles, setTiles] = useState<Tile[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-
-  type PendingMove = {
-    from: { q: number; r: number };
-    to: { q: number; r: number };
-    amount: number;
-    owner: number;
-    resolvesAt: number;
-  };
-
   const [pendingMoves, setPendingMoves] = useState<PendingMove[]>([]);
 
   function resetGame() {
@@ -111,120 +214,16 @@ export default function HexGrid() {
     if (tiles) localStorage.setItem("tiles", JSON.stringify(tiles));
   }, [tiles]);
 
-  // Tick drives simulation
   useEffect(() => {
     if (!tiles) return;
-    runTick();
-  }, [tick]);
 
-  // Interval ONLY advances time
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTick((t) => t + 1);
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  function getBotMove(
-    currentTiles: Tile[],
-    currentTick: number,
-  ): PendingMove | null {
-    const enemyTiles = currentTiles.filter((t) => t.owner === 2 && t.units > 1);
-    if (enemyTiles.length === 0) return null;
-
-    const source = enemyTiles[Math.floor(Math.random() * enemyTiles.length)];
-
-    const neighbors = directions
-      .map(([dq, dr]) =>
-        currentTiles.find(
-          (t) => t.q === source.q + dq && t.r === source.r + dr,
-        ),
-      )
-      .filter((t): t is Tile => !!t && t.terrain !== "water" && t.owner !== 2);
-
-    if (neighbors.length === 0) return null;
-
-    neighbors.sort((a, b) => a.units - b.units);
-    const target = neighbors[0];
-
-    const amount = source.units - 1;
-    if (amount <= 0) return null;
-
-    return {
-      from: { q: source.q, r: source.r },
-      to: { q: target.q, r: target.r },
-      amount,
-      owner: 2,
-      resolvesAt: currentTick + 1,
-    };
-  }
-
-  function runTick() {
-    if (!tiles) return;
-
-    const currentTick = tick;
-
-    const resolving = pendingMoves.filter((m) => m.resolvesAt === currentTick);
-    const remaining = pendingMoves.filter((m) => m.resolvesAt > currentTick);
+    const resolving = pendingMoves.filter((m) => m.resolvesAt === tick);
+    const remaining = pendingMoves.filter((m) => m.resolvesAt > tick);
 
     let next = applyTick(tiles);
+    next = resolveMoves(next, resolving);
 
-    const groups = new Map<string, PendingMove[]>();
-
-    resolving.forEach((m) => {
-      const key = `${m.to.q},${m.to.r}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(m);
-    });
-
-    groups.forEach((groupMoves) => {
-      const { q, r } = groupMoves[0].to;
-      const target = next.find((t) => t.q === q && t.r === r);
-      if (!target) return;
-
-      const attacksByOwner = new Map<number, number>();
-      groupMoves.forEach((m) => {
-        attacksByOwner.set(
-          m.owner,
-          (attacksByOwner.get(m.owner) || 0) + m.amount,
-        );
-      });
-
-      const [attackerOwner, attackPower] = Array.from(
-        attacksByOwner.entries(),
-      ).sort((a, b) => b[1] - a[1])[0];
-
-      let newUnits: number;
-      let newOwner = target.owner;
-
-      if (target.owner === attackerOwner) {
-        newUnits = target.units + attackPower;
-      } else {
-        const defenseMultiplier = target.owner === null ? 0.7 : 1.0;
-        const defense = Math.floor(target.units * defenseMultiplier);
-
-        if (attackPower >= defense) {
-          newUnits = attackPower - defense;
-          newOwner = attackerOwner;
-        } else {
-          newUnits = target.units - attackPower;
-
-          if (newUnits <= 0) {
-            newUnits = 0;
-            newOwner = attackerOwner;
-          }
-        }
-      }
-
-      newUnits = Math.min(STORAGE_CAP, Math.max(0, newUnits));
-
-      next = next.map((t) =>
-        t.q === q && t.r === r ? { ...t, units: newUnits, owner: newOwner } : t,
-      );
-    });
-
-    const botMove = getBotMove(next, currentTick);
+    const botMove = getBotMove(next, tick);
 
     if (botMove) {
       next = next.map((t) =>
@@ -236,14 +235,22 @@ export default function HexGrid() {
 
     setTiles(next);
     setPendingMoves(botMove ? [...remaining, botMove] : remaining);
-  }
+  }, [tick]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   if (!tiles) return null;
 
   const validMoves = getValidMoves(tiles, selected);
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div style={{ marginBottom: 10 }}>
         <button className={BTN} onClick={() => setTick((t) => t + 1)}>
           Run Tick
@@ -322,7 +329,6 @@ export default function HexGrid() {
                 }}
               />
 
-              {/* Debug circles */}
               {pendingMoves
                 .filter((m) => m.to.q === q && m.to.r === r)
                 .map((m, i) => (
@@ -352,7 +358,6 @@ export default function HexGrid() {
           );
         })}
 
-        {/* Debug arrows */}
         {pendingMoves.map((move, i) => {
           const from = hexToPixel(move.from.q, move.from.r);
           const to = hexToPixel(move.to.q, move.to.r);
@@ -372,6 +377,28 @@ export default function HexGrid() {
           );
         })}
       </svg>
+      <div
+        style={{
+          position: "absolute",
+          bottom: 10,
+          left: 10,
+          background: "rgba(0,0,0,0.7)",
+          color: "white",
+          padding: "8px 10px",
+          fontSize: 12,
+          borderRadius: 6,
+          pointerEvents: "none",
+        }}
+      >
+        <div>Tick: {tick}</div>
+        <div>Pending: {pendingMoves.length}</div>
+        {pendingMoves.map((m, i) => (
+          <div key={i}>
+            {m.owner === 1 ? "P" : "B"} → ({m.from.q},{m.from.r}) → ({m.to.q},
+            {m.to.r}) @ {m.resolvesAt}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
