@@ -145,7 +145,7 @@ export default function HexGrid() {
 
       <svg width={600} height={600} style={{ border: "1px solid gray" }}>
         {tiles.map((tile) => {
-          const { q, r, owner, troops, terrain } = tile;
+          const { q, r, owner, troops, terrain, civilians } = tile;
           const { x, y } = hexToPixel(q, r);
           const key = `${q},${r}`;
 
@@ -237,16 +237,17 @@ export default function HexGrid() {
                   if (owner === 1) setSelected(key);
                 }}
               />
-
-              <text
-                x={x + 300}
-                y={y + 305}
-                textAnchor="middle"
-                fontSize="12"
-                pointerEvents="none"
-              >
-                {troops}
-              </text>
+              {terrain !== "water" && (
+                <text
+                  x={x + 300}
+                  y={y + 305}
+                  textAnchor="middle"
+                  fontSize="12"
+                  pointerEvents="none"
+                >
+                  T:{troops} C:{Math.floor(civilians)}
+                </text>
+              )}
             </g>
           );
         })}

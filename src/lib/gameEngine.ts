@@ -278,6 +278,22 @@ export function getMaxTransferAmount(
   return Math.max(0, Math.min(baseAmount, maxTransfer));
 }
 
+export function applyCivilianGrowth(tiles: Tile[]) {
+  return tiles.map((t) => {
+    if (t.owner == null || t.capacity === 0) return t;
+
+    const growthFactor = 1 - t.civilians / t.capacity;
+    const growth = t.growthRate * growthFactor;
+
+    const newCivilians = t.civilians + growth;
+
+    return {
+      ...t,
+      civilians: newCivilians > t.capacity - 0.01 ? t.capacity : newCivilians,
+    };
+  });
+}
+
 // ------------------------------
 // MAIN ENGINE
 // ------------------------------
@@ -313,6 +329,7 @@ export function processTick(state: GameState): GameState {
   tiles = resolveMoves(tiles, resolving);
 
   tiles = applyTick(tiles);
+  tiles = applyCivilianGrowth(tiles);
 
   // 3. Income
   let playerTiles = 0;
