@@ -240,6 +240,29 @@ export default function HexGrid() {
     [],
   );
   const [automationEnabled, setAutomationEnabled] = useState(false);
+  const [playerSupply, setPlayerSupply] = useState(0);
+  const [botSupply, setBotSupply] = useState(0);
+
+  function resetGame() {
+    localStorage.removeItem("tiles");
+
+    const fresh = generateGrid(5);
+
+    setTiles(fresh);
+    setSelected(null);
+
+    // core simulation
+    setPendingMoves([]);
+    setScheduledActions([]);
+    setTick(0);
+
+    // economy
+    setPlayerSupply(0);
+    setBotSupply(0);
+
+    // automation
+    setAutomationEnabled(false);
+  }
 
   useEffect(() => {
     setTiles(generateGrid(5));
@@ -267,6 +290,19 @@ export default function HexGrid() {
     const remaining = combined.filter((m) => m.resolvesAt > currentTick);
 
     let next = applyTick(tiles);
+
+    // Tiles generate supply.
+    let playerIncome = 0;
+    let botIncome = 0;
+
+    tiles.forEach((t) => {
+      if (t.owner === 1) playerIncome += 1;
+      if (t.owner === 2) botIncome += 1;
+    });
+
+    setPlayerSupply((s) => s + playerIncome);
+    setBotSupply((s) => s + botIncome);
+
     next = resolveMoves(next, resolving);
 
     let nextScheduled = future;
@@ -277,12 +313,16 @@ export default function HexGrid() {
 
     const botMove = getBotMove(next, currentTick);
 
-    if (botMove) {
+    if (botMove && botSupply >= botMove.amount) {
+      setBotSupply((s) => s - botMove.amount);
+
       next = next.map((t) =>
         t.q === botMove.from.q && t.r === botMove.from.r
           ? { ...t, units: t.units - botMove.amount }
           : t,
       );
+    } else {
+      // Do nothing, bot can't afford move
     }
 
     const nextPending = botMove ? [...remaining, botMove] : remaining;
@@ -306,6 +346,9 @@ export default function HexGrid() {
       <div style={{ marginBottom: 10 }}>
         <button className={BTN} onClick={() => setTick((t) => t + 1)}>
           Run Tick
+        </button>
+        <button className={BTN} onClick={resetGame} style={{ marginLeft: 10 }}>
+          Reset Game
         </button>
         <button
           className={BTN}
@@ -357,6 +400,13 @@ export default function HexGrid() {
                       if (!source || source.units <= 1) return;
 
                       const amount = source.units - 1;
+
+                      // Moves cost supply
+                      const cost = amount;
+
+                      if (playerSupply < cost) return; // block move
+
+                      setPlayerSupply((s) => s - cost);
 
                       setTiles((prev) =>
                         prev
@@ -471,7 +521,12 @@ export default function HexGrid() {
           borderRadius: 6,
         }}
       >
+        <div style={{ marginBottom: 10 }}>
+          <span style={{ marginRight: 15 }}>Player Supply: {playerSupply}</span>
+          <span>Bot Supply: {botSupply}</span>
+        </div>
         <div>Tick: {tick}</div>
+        <div>Scheduled: {scheduledActions.length}</div>
         <div>Pending: {pendingMoves.length}</div>
       </div>
     </div>
