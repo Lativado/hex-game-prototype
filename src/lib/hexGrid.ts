@@ -21,7 +21,7 @@ export function generateGrid(radius: number): Tile[] {
               : seededRandom(seed + 1) > 0.8
                 ? 2
                 : null,
-          units: isWater ? 0 : Math.floor(seededRandom(seed + 1) * 10),
+          troops: isWater ? 0 : Math.floor(seededRandom(seed + 1) * 10),
         });
       }
     }

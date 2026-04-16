@@ -6,7 +6,7 @@ export type Tile = {
   q: number;
   r: number;
   owner: Owner | null;
-  units: number;
+  troops: number;
   terrain: string;
 };
 
@@ -113,9 +113,9 @@ function applyTick(tiles: Tile[]): Tile[] {
     if (
       (t.owner === 1 || t.owner === 2) &&
       t.terrain !== "water" &&
-      t.units < PRODUCTION_CAP
+      t.troops < PRODUCTION_CAP
     ) {
-      return { ...t, units: t.units + 1 };
+      return { ...t, troops: t.troops + 1 };
     }
     return t;
   });
@@ -150,31 +150,31 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
       attacksByOwner.entries(),
     ).sort((a, b) => b[1] - a[1])[0];
 
-    let newUnits: number;
+    let newtroops: number;
     let newOwner = target.owner;
 
     if (target.owner === attackerOwner) {
-      newUnits = target.units + attackPower;
+      newtroops = target.troops + attackPower;
     } else {
       const defenseMultiplier = target.owner === null ? 0.7 : 1.0;
-      const defense = Math.floor(target.units * defenseMultiplier);
+      const defense = Math.floor(target.troops * defenseMultiplier);
 
       if (attackPower >= defense) {
-        newUnits = attackPower - defense;
+        newtroops = attackPower - defense;
         newOwner = attackerOwner;
       } else {
-        newUnits = target.units - attackPower;
-        if (newUnits <= 0) {
-          newUnits = 0;
+        newtroops = target.troops - attackPower;
+        if (newtroops <= 0) {
+          newtroops = 0;
           newOwner = attackerOwner;
         }
       }
     }
 
-    newUnits = Math.min(STORAGE_CAP, Math.max(0, newUnits));
+    newtroops = Math.min(STORAGE_CAP, Math.max(0, newtroops));
 
     next = next.map((t) =>
-      t.q === q && t.r === r ? { ...t, units: newUnits, owner: newOwner } : t,
+      t.q === q && t.r === r ? { ...t, troops: newtroops, owner: newOwner } : t,
     );
   });
 
@@ -182,7 +182,7 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
 }
 
 function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
-  const owned = tiles.filter((t) => t.owner === 2 && t.units > 1);
+  const owned = tiles.filter((t) => t.owner === 2 && t.troops > 1);
   if (!owned.length) return null;
 
   const source = owned[Math.floor(Math.random() * owned.length)];
@@ -195,7 +195,7 @@ function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
 
   if (!neighbors.length) return null;
 
-  neighbors.sort((a, b) => a.units - b.units);
+  neighbors.sort((a, b) => a.troops - b.troops);
   const target = neighbors[0];
 
   const amount = getMaxTransferAmount(
@@ -220,7 +220,7 @@ function runAutomation(tiles: Tile[], tick: number): ScheduledAction[] {
 
   tiles.forEach((tile) => {
     if (tile.owner !== 1) return;
-    if (tile.units < 10) return;
+    if (tile.troops < 10) return;
 
     const neighbors = directions
       .map(([dq, dr]) =>
@@ -230,7 +230,7 @@ function runAutomation(tiles: Tile[], tick: number): ScheduledAction[] {
 
     if (!neighbors.length) return;
 
-    neighbors.sort((a, b) => a.units - b.units);
+    neighbors.sort((a, b) => a.troops - b.troops);
     const target = neighbors[0];
 
     const amount = getMaxTransferAmount(
@@ -263,9 +263,9 @@ export function getMaxTransferAmount(
   const target = tiles.find((t) => t.q === to.q && t.r === to.r);
 
   if (!source || !target) return 0;
-  if (source.units <= 1) return 0;
+  if (source.troops <= 1) return 0;
 
-  const baseAmount = source.units - 1;
+  const baseAmount = source.troops - 1;
 
   // Combat: ignore cap
   if (target.owner !== source.owner) {
@@ -273,7 +273,7 @@ export function getMaxTransferAmount(
   }
 
   // Friendly: respect cap
-  const maxTransfer = STORAGE_CAP - target.units;
+  const maxTransfer = STORAGE_CAP - target.troops;
 
   return Math.max(0, Math.min(baseAmount, maxTransfer));
 }
@@ -372,7 +372,7 @@ export function processTick(state: GameState): GameState {
 
       tiles = tiles.map((t) =>
         t.q === move.from.q && t.r === move.from.r
-          ? { ...t, units: t.units - move.amount }
+          ? { ...t, troops: t.troops - move.amount }
           : t,
       );
 

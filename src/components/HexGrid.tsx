@@ -42,7 +42,7 @@ function getHexPoints(x: number, y: number) {
   return points.join(" ");
 }
 
-function getColor(owner: number | null, terrain: string, units: number) {
+function getColor(owner: number | null, terrain: string, troops: number) {
   if (terrain === "water") return "#1e3a8a";
 
   if (owner === 1) return "green";
@@ -145,7 +145,7 @@ export default function HexGrid() {
 
       <svg width={600} height={600} style={{ border: "1px solid gray" }}>
         {tiles.map((tile) => {
-          const { q, r, owner, units, terrain } = tile;
+          const { q, r, owner, troops, terrain } = tile;
           const { x, y } = hexToPixel(q, r);
           const key = `${q},${r}`;
 
@@ -161,7 +161,7 @@ export default function HexGrid() {
                     ? "orange"
                     : isValidMove
                       ? "yellow"
-                      : getColor(owner, terrain, units)
+                      : getColor(owner, terrain, troops)
                 }
                 stroke="black"
                 onClick={() => {
@@ -183,7 +183,7 @@ export default function HexGrid() {
                     const source = tiles.find(
                       (t) => t.q === fromQ && t.r === fromR,
                     );
-                    if (!source || source.units <= 1) return;
+                    if (!source || source.troops <= 1) return;
 
                     const amount = getMaxTransferAmount(
                       tiles,
@@ -223,7 +223,7 @@ export default function HexGrid() {
                         botSupply: supplies.botSupply,
                         tiles: prev.tiles.map((t) =>
                           t.q === source.q && t.r === source.r
-                            ? { ...t, units: t.units - amount }
+                            ? { ...t, troops: t.troops - amount }
                             : t,
                         ),
                         pendingMoves: [...prev.pendingMoves, move],
@@ -245,7 +245,7 @@ export default function HexGrid() {
                 fontSize="12"
                 pointerEvents="none"
               >
-                {units}
+                {troops}
               </text>
             </g>
           );
