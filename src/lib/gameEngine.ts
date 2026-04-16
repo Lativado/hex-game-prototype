@@ -1,14 +1,7 @@
 // gameEngine.ts
+import type { Tile } from "@/types/tile";
 
 export type Owner = 1 | 2;
-
-export type Tile = {
-  q: number;
-  r: number;
-  owner: Owner | null;
-  troops: number;
-  terrain: string;
-};
 
 export type PendingMove = {
   from: { q: number; r: number };
