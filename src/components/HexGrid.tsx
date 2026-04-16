@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { generateGrid } from "../lib/hexGrid";
 import { Tile } from "@/types/tile";
+import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
   processTick,
   tryCreateMove,
@@ -184,7 +185,13 @@ export default function HexGrid() {
                     );
                     if (!source || source.units <= 1) return;
 
-                    const amount = source.units - 1;
+                    const amount = getMaxTransferAmount(
+                      tiles,
+                      { q: source.q, r: source.r },
+                      { q, r },
+                    );
+
+                    if (amount <= 0) return;
 
                     const move = tryCreateMove(
                       {

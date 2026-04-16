@@ -198,7 +198,12 @@ function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
   neighbors.sort((a, b) => a.units - b.units);
   const target = neighbors[0];
 
-  const amount = source.units - 1;
+  const amount = getMaxTransferAmount(
+    tiles,
+    { q: source.q, r: source.r },
+    { q: target.q, r: target.r },
+  );
+
   if (amount <= 0) return null;
 
   return {
@@ -228,17 +233,49 @@ function runAutomation(tiles: Tile[], tick: number): ScheduledAction[] {
     neighbors.sort((a, b) => a.units - b.units);
     const target = neighbors[0];
 
+    const amount = getMaxTransferAmount(
+      tiles,
+      { q: tile.q, r: tile.r },
+      { q: target.q, r: target.r },
+    );
+
+    if (amount <= 0) return;
+
     actions.push({
       id: `${tile.q},${tile.r}-${tick}`,
       owner: 1,
       from: { q: tile.q, r: tile.r },
       to: { q: target.q, r: target.r },
-      amount: tile.units - 1,
+      amount: amount,
       executeAt: tick + 1,
     });
   });
 
   return actions;
+}
+
+export function getMaxTransferAmount(
+  tiles: Tile[],
+  from: { q: number; r: number },
+  to: { q: number; r: number },
+) {
+  const source = tiles.find((t) => t.q === from.q && t.r === from.r);
+  const target = tiles.find((t) => t.q === to.q && t.r === to.r);
+
+  if (!source || !target) return 0;
+  if (source.units <= 1) return 0;
+
+  const baseAmount = source.units - 1;
+
+  // Combat: ignore cap
+  if (target.owner !== source.owner) {
+    return baseAmount;
+  }
+
+  // Friendly: respect cap
+  const maxTransfer = STORAGE_CAP - target.units;
+
+  return Math.max(0, Math.min(baseAmount, maxTransfer));
 }
 
 // ------------------------------
