@@ -3,7 +3,7 @@ export type Tile = {
   r: number;
   owner: number | null;
   troops: number;
-  overFlowTroops: number;
+  overflowTroops: number;
   draftProgress: number;
   civilians: number;
   civilianCapacity: number;

@@ -245,7 +245,9 @@ export default function HexGrid() {
                   fontSize="12"
                   pointerEvents="none"
                 >
-                  T:{troops} C:{Math.floor(civilians)}
+                  T:{troops} C:{Math.floor(civilians)}{" "}
+                  {(tile.draftProgress ?? 0) > 0.7 ? "+" : ""}{" "}
+                  {(tile.overflowTroops ?? 0) > 0 ? "!" : ""}
                 </text>
               )}
             </g>
