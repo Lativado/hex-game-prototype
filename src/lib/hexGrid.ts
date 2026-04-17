@@ -21,8 +21,9 @@ export function generateGrid(radius: number): Tile[] {
           owner: isWater ? null : randB > 0.7 ? 1 : randC > 0.8 ? 2 : null,
           troops: isWater ? 0 : Math.floor(randB * 10),
           civilians: isWater ? 0 : 5,
-          capacity: isWater ? 0 : 10,
+          civilianCapacity: isWater ? 0 : 10,
           growthRate: isWater ? 0 : 1,
+          draftProgress: 0,
         });
       }
     }

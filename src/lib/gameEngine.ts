@@ -30,8 +30,7 @@ export type GameState = {
   automationEnabled: boolean;
 };
 
-const PRODUCTION_CAP = 20;
-const STORAGE_CAP = 30;
+const GARRISON_LIMIT = 30;
 
 const directions = [
   [1, 0],
@@ -97,20 +96,24 @@ export function tryCreateMove(
   return intent;
 }
 
-// ------------------------------
-// Simulation Pieces
-// ------------------------------
-
-function applyTick(tiles: Tile[]): Tile[] {
+function applyTroopProduction(tiles: Tile[]): Tile[] {
   return tiles.map((t) => {
-    if (
-      (t.owner === 1 || t.owner === 2) &&
-      t.terrain !== "water" &&
-      t.troops < PRODUCTION_CAP
-    ) {
-      return { ...t, troops: t.troops + 1 };
-    }
-    return t;
+    if (t.owner == null || t.terrain === "water") return t;
+
+    const draftRate = 0.05;
+
+    const totalDraft = (t.draftProgress ?? 0) + t.civilians * draftRate;
+
+    const usableTroops = Math.floor(totalDraft);
+    const actualDraft = Math.min(usableTroops, t.civilians);
+    const remainingPartial = totalDraft - usableTroops;
+
+    return {
+      ...t,
+      civilians: t.civilians - actualDraft,
+      troops: t.troops + actualDraft,
+      draftProgress: remainingPartial,
+    };
   });
 }
 
@@ -164,7 +167,7 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
       }
     }
 
-    newtroops = Math.min(STORAGE_CAP, Math.max(0, newtroops));
+    newtroops = Math.min(GARRISON_LIMIT, Math.max(0, newtroops));
 
     next = next.map((t) =>
       t.q === q && t.r === r ? { ...t, troops: newtroops, owner: newOwner } : t,
@@ -266,23 +269,26 @@ export function getMaxTransferAmount(
   }
 
   // Friendly: respect cap
-  const maxTransfer = STORAGE_CAP - target.troops;
+  const maxTransfer = GARRISON_LIMIT - target.troops;
 
   return Math.max(0, Math.min(baseAmount, maxTransfer));
 }
 
 export function applyCivilianGrowth(tiles: Tile[]) {
   return tiles.map((t) => {
-    if (t.owner == null || t.capacity === 0) return t;
+    if (t.owner == null || t.civilianCapacity === 0) return t;
 
-    const growthFactor = 1 - t.civilians / t.capacity;
+    const growthFactor = Math.max(0, 1 - t.civilians / t.civilianCapacity);
     const growth = t.growthRate * growthFactor;
 
     const newCivilians = t.civilians + growth;
 
     return {
       ...t,
-      civilians: newCivilians > t.capacity - 0.01 ? t.capacity : newCivilians,
+      civilians:
+        newCivilians > t.civilianCapacity - 0.01
+          ? t.civilianCapacity
+          : newCivilians,
     };
   });
 }
@@ -321,8 +327,8 @@ export function processTick(state: GameState): GameState {
 
   tiles = resolveMoves(tiles, resolving);
 
-  tiles = applyTick(tiles);
   tiles = applyCivilianGrowth(tiles);
+  tiles = applyTroopProduction(tiles);
 
   // 3. Income
   let playerTiles = 0;
