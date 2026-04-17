@@ -103,23 +103,24 @@ function applyTroopProduction(tiles: Tile[]): Tile[] {
     const draftRate = 0.05;
 
     const totalDraft = (t.draftProgress ?? 0) + t.civilians * draftRate;
-
     const usableTroops = Math.floor(totalDraft);
-    const actualDraft = Math.min(usableTroops, t.civilians);
-    const remainingPartial = totalDraft - usableTroops;
+
+    const availableSpace = GARRISON_LIMIT - t.troops;
+    const actualDraft = Math.min(usableTroops, t.civilians, availableSpace);
+
+    const remainingDraftProgress = totalDraft - usableTroops;
 
     return {
       ...t,
       civilians: t.civilians - actualDraft,
       troops: t.troops + actualDraft,
-      draftProgress: remainingPartial,
+      draftProgress: remainingDraftProgress,
     };
   });
 }
 
-function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
-  let next = [...tiles];
-
+function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
+  // Group moves by target tile
   const groups = new Map<string, PendingMove[]>();
 
   moves.forEach((m) => {
@@ -128,11 +129,18 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
     groups.get(key)!.push(m);
   });
 
-  groups.forEach((groupMoves) => {
-    const { q, r } = groupMoves[0].to;
-    const target = next.find((t) => t.q === q && t.r === r);
-    if (!target) return;
+  return tiles.map((tile) => {
+    const key = `${tile.q},${tile.r}`;
+    const groupMoves = groups.get(key);
 
+    // No incoming moves → unchanged
+    if (!groupMoves || groupMoves.length === 0) {
+      return tile;
+    }
+
+    const originalOwner = tile.owner;
+
+    // Sum attacks by owner
     const attacksByOwner = new Map<number, number>();
 
     groupMoves.forEach((m) => {
@@ -142,39 +150,56 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]) {
       );
     });
 
+    // Find strongest attacker
     const [attackerOwner, attackPower] = Array.from(
       attacksByOwner.entries(),
     ).sort((a, b) => b[1] - a[1])[0];
 
-    let newtroops: number;
-    let newOwner = target.owner;
+    let newOwner = tile.owner;
+    let newTroops = tile.troops;
+    let newCivilians = tile.civilians;
 
-    if (target.owner === attackerOwner) {
-      newtroops = target.troops + attackPower;
+    if (tile.owner === attackerOwner) {
+      // Reinforcement
+      newTroops = tile.troops + attackPower;
     } else {
-      const defenseMultiplier = target.owner === null ? 0.7 : 1.0;
-      const defense = Math.floor(target.troops * defenseMultiplier);
+      const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
+      const defense = Math.floor(tile.troops * defenseMultiplier);
 
       if (attackPower >= defense) {
-        newtroops = attackPower - defense;
+        newTroops = attackPower - defense;
         newOwner = attackerOwner;
       } else {
-        newtroops = target.troops - attackPower;
-        if (newtroops <= 0) {
-          newtroops = 0;
+        newTroops = tile.troops - attackPower;
+
+        if (newTroops <= 0) {
+          newTroops = 0;
           newOwner = attackerOwner;
         }
       }
     }
 
-    newtroops = Math.min(GARRISON_LIMIT, Math.max(0, newtroops));
+    // Apply civilian loss ONCE if ownership changed from original
+    if (originalOwner !== newOwner) {
+      newCivilians = tile.civilians * 0.7;
+    }
 
-    next = next.map((t) =>
-      t.q === q && t.r === r ? { ...t, troops: newtroops, owner: newOwner } : t,
-    );
+    // Handle garrison limit WITHOUT silent deletion
+    let overflow = 0;
+
+    if (newTroops > GARRISON_LIMIT) {
+      overflow = newTroops - GARRISON_LIMIT;
+      newTroops = GARRISON_LIMIT;
+    }
+
+    return {
+      ...tile,
+      owner: newOwner,
+      troops: Math.max(0, newTroops),
+      civilians: newCivilians,
+      overflowTroops: overflow,
+    };
   });
-
-  return next;
 }
 
 function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
