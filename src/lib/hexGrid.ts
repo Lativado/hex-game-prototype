@@ -23,6 +23,7 @@ export function generateGrid(radius: number): Tile[] {
           overflowTroops: 0,
           civilians: isWater ? 0 : 5,
           civilianCapacity: isWater ? 0 : 10,
+          populationCapacity: isWater ? 0 : 20,
           growthRate: isWater ? 0 : 1,
           draftProgress: 0,
         });
