@@ -82,6 +82,7 @@ export default function HexGrid() {
       playerSupply: 0,
       botSupply: 0,
       automationEnabled: false,
+      targetMilitaryRatio: 0.2,
     });
 
     setSelected(null);
@@ -110,6 +111,7 @@ export default function HexGrid() {
     playerSupply,
     botSupply,
     automationEnabled,
+    targetMilitaryRatio,
   } = state;
 
   const validMoves = getValidMoves(tiles, selected);
@@ -141,6 +143,25 @@ export default function HexGrid() {
 
       <div style={{ marginBottom: 10 }}>
         Player Supply: {playerSupply} | Bot Supply: {botSupply}
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        Draft:
+        {[0.2, 0.3, 0.4, 0.5].map((r) => (
+          <button
+            key={r}
+            className={BTN}
+            style={{
+              marginLeft: 6,
+              background: targetMilitaryRatio === r ? "#94a3b8" : undefined,
+            }}
+            onClick={() =>
+              setState((s) => (s ? { ...s, targetMilitaryRatio: r } : s))
+            }
+          >
+            {Math.round(r * 100)}%
+          </button>
+        ))}
       </div>
 
       <svg width={600} height={600} style={{ border: "1px solid gray" }}>

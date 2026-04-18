@@ -28,6 +28,7 @@ export type GameState = {
   playerSupply: number;
   botSupply: number;
   automationEnabled: boolean;
+  targetMilitaryRatio: number;
 };
 
 const GARRISON_LIMIT = 50;
@@ -103,33 +104,27 @@ export function applyDraft(tiles: Tile[], draftTargetRatio: number): Tile[] {
     const totalPop = t.civilians + t.troops;
     if (totalPop <= 0) return t;
 
-    const targetTroops = totalPop * draftTargetRatio;
+    // Integer target to avoid float jitter
+    const targetTroops = Math.floor(totalPop * draftTargetRatio);
     const troopDeficit = targetTroops - t.troops;
 
-    if (troopDeficit <= 0) {
-      return {
-        ...t,
-        draftProgress: 0,
-      };
-    }
+    // If we're at/above target, do nothing (keep progress so it can finish later)
+    if (troopDeficit <= 0) return t;
 
     const draftRate = 0.05;
 
+    // Accumulate fractional progress
     const totalDraft = (t.draftProgress ?? 0) + t.civilians * draftRate;
 
     const usableTroops = Math.floor(totalDraft);
 
-    const availableSpace = t.populationCapacity - t.civilians - t.troops;
-
-    const safeSpace = Math.max(0, availableSpace);
-
     const actualDraft = Math.min(
       usableTroops,
       Math.floor(t.civilians),
-      Math.floor(safeSpace),
-      Math.floor(troopDeficit),
+      troopDeficit,
     );
 
+    // Keep leftover fractional progress
     const remainingDraftProgress = totalDraft - actualDraft;
 
     return {
@@ -377,7 +372,7 @@ export function processTick(state: GameState): GameState {
   tiles = resolveMoves(tiles, resolving);
 
   tiles = applyCivilianGrowth(tiles);
-  tiles = applyDraft(tiles, 0.2);
+  tiles = applyDraft(tiles, state.targetMilitaryRatio);
 
   // 3. Income
   let playerTiles = 0;
@@ -453,5 +448,6 @@ export function processTick(state: GameState): GameState {
     playerSupply,
     botSupply,
     automationEnabled: state.automationEnabled,
+    targetMilitaryRatio: state.targetMilitaryRatio,
   };
 }
