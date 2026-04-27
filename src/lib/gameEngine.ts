@@ -1,6 +1,7 @@
 // gameEngine.ts
 import type {
   GameState,
+  GameStatus,
   PendingMove,
   ScheduledAction,
   TickResult,
@@ -64,6 +65,25 @@ function getTileKey(tile: Tile) {
 function getEffectiveDefense(tile: Tile) {
   const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
   return Math.floor(tile.troops * defenseMultiplier);
+}
+
+function getGameStatus(tiles: Tile[]): GameStatus {
+  const owners = new Set<Owner>();
+
+  tiles.forEach((tile) => {
+    if (tile.owner !== null) {
+      owners.add(tile.owner);
+    }
+  });
+
+  if (owners.size !== 1) {
+    return { type: "active" };
+  }
+
+  return {
+    type: "won",
+    winner: Array.from(owners)[0],
+  };
 }
 
 export function canExecuteMove(
@@ -548,6 +568,13 @@ export function applyCivilianGrowth(tiles: Tile[]) {
 // ------------------------------
 
 export function processTick(state: GameState, players: PlayersState): TickResult {
+  if (state.status.type === "won") {
+    return {
+      gameState: state,
+      players,
+    };
+  }
+
   const currentTick = state.tick;
 
   let tiles = [...state.tiles];
@@ -662,12 +689,15 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   // 7. Return new state
   // ------------------------------
+  const status = getGameStatus(tiles);
+
   return {
     gameState: {
       tiles,
-      pendingMoves: finalPending,
-      scheduledActions: scheduled,
+      pendingMoves: status.type === "won" ? [] : finalPending,
+      scheduledActions: status.type === "won" ? [] : scheduled,
       tick: currentTick + 1,
+      status,
     },
     players: nextPlayers,
   };

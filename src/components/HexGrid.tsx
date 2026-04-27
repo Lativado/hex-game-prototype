@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { generateGrid } from "../lib/hexGrid";
 import type { GameState } from "@/types/game";
-import type { PlayersState } from "@/types/player";
+import type { Owner, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
 import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
@@ -68,6 +68,36 @@ function getValidMoves(tiles: Tile[], selected: string | null): Set<string> {
   return moves;
 }
 
+function getTileCounts(tiles: Tile[]) {
+  return tiles.reduce(
+    (counts, tile) => {
+      if (tile.terrain === "water") return counts;
+
+      if (tile.owner === null) {
+        counts.neutral += 1;
+      } else {
+        counts.owners[tile.owner] += 1;
+      }
+
+      return counts;
+    },
+    {
+      owners: {
+        1: 0,
+        2: 0,
+      } satisfies Record<Owner, number>,
+      neutral: 0,
+    },
+  );
+}
+
+function getOwnerLabel(owner: Owner) {
+  if (owner === 1) return "Player";
+  if (owner === 2) return "Bot";
+
+  return `Player ${owner}`;
+}
+
 type HexGridState = {
   gameState: GameState;
   players: PlayersState;
@@ -95,6 +125,7 @@ function createInitialState(): HexGridState {
       pendingMoves: [],
       scheduledActions: [],
       tick: 0,
+      status: { type: "active" },
     },
     players: createInitialPlayers(),
   };
@@ -118,10 +149,11 @@ export default function HexGrid() {
   }, []);
 
   const { gameState, players } = state;
-  const { tiles, pendingMoves, tick } = gameState;
+  const { tiles, pendingMoves, status, tick } = gameState;
 
   const player = players[1];
   const bot = players[2];
+  const tileCounts = getTileCounts(tiles);
 
   const validMoves = getValidMoves(tiles, selected);
 
@@ -130,6 +162,7 @@ export default function HexGrid() {
       <div style={{ marginBottom: 10 }}>
         <button
           className={BTN}
+          disabled={status.type === "won"}
           onClick={() =>
             setState((s) => processTick(s.gameState, s.players))
           }
@@ -142,6 +175,7 @@ export default function HexGrid() {
       </div>
       <button
         className={BTN}
+        disabled={status.type === "won"}
         onClick={() =>
           setState((s) => ({
             ...s,
@@ -159,8 +193,30 @@ export default function HexGrid() {
         Auto: {player.automationEnabled ? "ON" : "OFF"}
       </button>
 
+      {status.type === "won" && (
+        <div
+          style={{
+            marginTop: 10,
+            marginBottom: 10,
+            padding: "10px 12px",
+            border: "1px solid #94a3b8",
+            background: "#e2e8f0",
+            color: "#0f172a",
+          }}
+        >
+          {getOwnerLabel(status.winner)} wins.
+          <button className={BTN} onClick={resetGame} style={{ marginLeft: 10 }}>
+            Reset Game
+          </button>
+        </div>
+      )}
+
       <div style={{ marginBottom: 10 }}>
         Player Supply: {player.supply} | Bot Supply: {bot.supply}
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        Tiles: Player {tileCounts.owners[1]} | Bot {tileCounts.owners[2]} |
+        Neutral {tileCounts.neutral}
       </div>
 
       <div style={{ marginBottom: 10 }}>
@@ -174,6 +230,7 @@ export default function HexGrid() {
               background:
                 player.targetMilitaryRatio === r ? "#94a3b8" : undefined,
             }}
+            disabled={status.type === "won"}
             onClick={() =>
               setState((s) => ({
                 ...s,
@@ -214,6 +271,7 @@ export default function HexGrid() {
                 }
                 stroke="black"
                 onClick={() => {
+                  if (status.type === "won") return;
                   if (terrain === "water") return;
 
                   if (selected === key) {

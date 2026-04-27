@@ -23,7 +23,17 @@ export type GameState = {
   pendingMoves: PendingMove[];
   scheduledActions: ScheduledAction[];
   tick: number;
+  status: GameStatus;
 };
+
+export type GameStatus =
+  | {
+      type: "active";
+    }
+  | {
+      type: "won";
+      winner: Owner;
+    };
 
 export type TickResult = {
   gameState: GameState;
