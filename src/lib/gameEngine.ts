@@ -9,6 +9,8 @@ import type { Owner, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
 
 const GARRISON_LIMIT = 50;
+const AUTOMATION_MAX_MOVE_AMOUNT = 4;
+const AUTOMATION_SUPPLY_RESERVE = 200;
 
 const directions = [
   [1, 0],
@@ -25,6 +27,43 @@ const directions = [
 
 export function getMoveCost(amount: number) {
   return Math.ceil(amount * 1.5);
+}
+
+function getMaxAffordableMoveAmount(supply: number) {
+  return Math.floor(supply / 1.5);
+}
+
+function getAutomationMoveCost(amount: number) {
+  if (amount <= 1) return amount;
+
+  return getMoveCost(amount);
+}
+
+function getMaxAffordableAutomationMoveAmount(supply: number) {
+  if (supply <= 1) return supply;
+
+  return getMaxAffordableMoveAmount(supply);
+}
+
+function getDesiredAttackAmount(target: Tile) {
+  return getEffectiveDefense(target) + 1;
+}
+
+function getDesiredAutomationAmount(source: Tile, target: Tile) {
+  if (target.owner !== source.owner) {
+    return getDesiredAttackAmount(target);
+  }
+
+  return Math.min(2, Math.max(0, GARRISON_LIMIT - target.troops));
+}
+
+function getTileKey(tile: Tile) {
+  return `${tile.q},${tile.r}`;
+}
+
+function getEffectiveDefense(tile: Tile) {
+  const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
+  return Math.floor(tile.troops * defenseMultiplier);
 }
 
 export function canExecuteMove(
@@ -220,43 +259,243 @@ function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
   };
 }
 
-function runAutomation(tiles: Tile[], tick: number): ScheduledAction[] {
-  const actions: ScheduledAction[] = [];
+function getLandNeighbors(tiles: Tile[], tile: Tile) {
+  return directions
+    .map(([dq, dr]) => tiles.find((t) => t.q === tile.q + dq && t.r === tile.r + dr))
+    .filter((t): t is Tile => !!t && t.terrain !== "water");
+}
 
+function isFrontlineTile(tiles: Tile[], tile: Tile, owner: Owner) {
+  if (tile.owner !== owner) return false;
+
+  return getLandNeighbors(tiles, tile).some((neighbor) => neighbor.owner !== owner);
+}
+
+function getFriendlyFrontlineDistance(
+  tiles: Tile[],
+  tile: Tile,
+  owner: Owner,
+): number {
+  if (tile.owner !== owner) return Number.POSITIVE_INFINITY;
+  if (isFrontlineTile(tiles, tile, owner)) return 0;
+
+  const visited = new Set<string>([getTileKey(tile)]);
+  const queue = [{ tile, distance: 0 }];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+
+    for (const neighbor of getLandNeighbors(tiles, current.tile)) {
+      if (neighbor.owner !== owner) continue;
+
+      const key = getTileKey(neighbor);
+      if (visited.has(key)) continue;
+
+      if (isFrontlineTile(tiles, neighbor, owner)) {
+        return current.distance + 1;
+      }
+
+      visited.add(key);
+      queue.push({ tile: neighbor, distance: current.distance + 1 });
+    }
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function runAutomation(
+  tiles: Tile[],
+  tick: number,
+  availableSupply: number,
+): ScheduledAction[] {
+  const actions: ScheduledAction[] = [];
+  let remainingSupply = availableSupply;
+  const usedSources = new Set<string>();
+
+  const addActions = (
+    candidates: {
+      source: Tile;
+      target: Tile;
+    }[],
+    reserveFloor = 0,
+  ) => {
+    candidates.forEach(({ source, target }) => {
+      const spendableSupply = remainingSupply - reserveFloor;
+
+      if (spendableSupply < getAutomationMoveCost(1)) return;
+      if (usedSources.has(getTileKey(source))) return;
+
+      const maxTransferAmount = getMaxTransferAmount(
+        tiles,
+        { q: source.q, r: source.r },
+        { q: target.q, r: target.r },
+      );
+      const maxAffordableAmount =
+        getMaxAffordableAutomationMoveAmount(spendableSupply);
+
+      const amount = Math.min(
+        maxTransferAmount,
+        maxAffordableAmount,
+        getDesiredAutomationAmount(source, target),
+        AUTOMATION_MAX_MOVE_AMOUNT,
+      );
+
+      if (amount <= 0) return;
+
+      actions.push({
+        id: `${source.q},${source.r}-${tick}`,
+        owner: 1,
+        from: { q: source.q, r: source.r },
+        to: { q: target.q, r: target.r },
+        amount,
+        executeAt: tick + 1,
+      });
+
+      usedSources.add(getTileKey(source));
+      remainingSupply -= getAutomationMoveCost(amount);
+    });
+  };
+
+  const movableTiles = tiles.filter((tile) => tile.owner === 1 && tile.troops > 1);
+
+  const attackCandidates = movableTiles
+    .flatMap((source) =>
+      getLandNeighbors(tiles, source)
+        .filter((target) => target.owner !== 1)
+        .map((target) => ({ source, target })),
+    )
+    .filter(
+      ({ source, target }) =>
+        getMaxTransferAmount(
+          tiles,
+          { q: source.q, r: source.r },
+          { q: target.q, r: target.r },
+        ) >= getDesiredAttackAmount(target),
+    )
+    .sort((a, b) => {
+      const defenseDiff = getEffectiveDefense(a.target) - getEffectiveDefense(b.target);
+      if (defenseDiff !== 0) return defenseDiff;
+
+      return b.source.troops - a.source.troops;
+    });
+
+  addActions(attackCandidates);
+
+  const directFrontlineReinforcementCandidates = movableTiles
+    .filter((source) => !isFrontlineTile(tiles, source, 1))
+    .flatMap((source) =>
+      getLandNeighbors(tiles, source)
+        .filter(
+          (target) =>
+            target.owner === 1 &&
+            target.troops < GARRISON_LIMIT &&
+            isFrontlineTile(tiles, target, 1),
+        )
+        .map((target) => ({ source, target })),
+    )
+    .sort((a, b) => {
+      const targetDiff = a.target.troops - b.target.troops;
+      if (targetDiff !== 0) return targetDiff;
+
+      return b.source.troops - a.source.troops;
+    });
+
+  addActions(directFrontlineReinforcementCandidates);
+
+  if (remainingSupply < AUTOMATION_SUPPLY_RESERVE) {
+    return actions;
+  }
+
+  const frontlineDistances = new Map<string, number>();
   tiles.forEach((tile) => {
     if (tile.owner !== 1) return;
-    if (tile.troops < 10) return;
+    frontlineDistances.set(getTileKey(tile), getFriendlyFrontlineDistance(tiles, tile, 1));
+  });
 
-    const neighbors = directions
-      .map(([dq, dr]) =>
-        tiles.find((t) => t.q === tile.q + dq && t.r === tile.r + dr),
-      )
-      .filter((t): t is Tile => !!t && t.terrain !== "water");
+  const towardFrontReinforcementCandidates = movableTiles
+    .filter((source) => !isFrontlineTile(tiles, source, 1))
+    .flatMap((source) => {
+      const sourceDistance =
+        frontlineDistances.get(getTileKey(source)) ?? Number.POSITIVE_INFINITY;
 
-    if (!neighbors.length) return;
+      if (!Number.isFinite(sourceDistance)) return [];
 
-    neighbors.sort((a, b) => a.troops - b.troops);
-    const target = neighbors[0];
+      const neighbors = getLandNeighbors(tiles, source);
 
-    const amount = getMaxTransferAmount(
-      tiles,
-      { q: tile.q, r: tile.r },
-      { q: target.q, r: target.r },
+      return neighbors
+        .filter(
+          (target) =>
+            target.owner === 1 &&
+            target.troops < GARRISON_LIMIT &&
+            (frontlineDistances.get(getTileKey(target)) ??
+              Number.POSITIVE_INFINITY) < sourceDistance,
+        )
+        .map((target) => ({ source, target }));
+    })
+    .sort((a, b) => {
+      const aDistance =
+        frontlineDistances.get(getTileKey(a.target)) ?? Number.POSITIVE_INFINITY;
+      const bDistance =
+        frontlineDistances.get(getTileKey(b.target)) ?? Number.POSITIVE_INFINITY;
+      const distanceDiff = aDistance - bDistance;
+
+      if (distanceDiff !== 0) return distanceDiff;
+
+      const targetDiff = a.target.troops - b.target.troops;
+      return targetDiff === 0 ? b.source.troops - a.source.troops : targetDiff;
+    });
+
+  addActions(towardFrontReinforcementCandidates, AUTOMATION_SUPPLY_RESERVE);
+
+  return actions;
+}
+
+function executeScheduledActions(
+  tiles: Tile[],
+  scheduled: ScheduledAction[],
+  currentTick: number,
+) {
+  const pendingMoves: PendingMove[] = [];
+  let nextTiles = tiles;
+
+  scheduled.forEach((action) => {
+    if (action.executeAt !== currentTick) return;
+
+    const source = nextTiles.find(
+      (t) => t.q === action.from.q && t.r === action.from.r,
+    );
+
+    if (!source || source.owner !== action.owner || source.troops <= 1) {
+      return;
+    }
+
+    const amount = Math.min(
+      action.amount,
+      getMaxTransferAmount(nextTiles, action.from, action.to),
     );
 
     if (amount <= 0) return;
 
-    actions.push({
-      id: `${tile.q},${tile.r}-${tick}`,
-      owner: 1,
-      from: { q: tile.q, r: tile.r },
-      to: { q: target.q, r: target.r },
-      amount: amount,
-      executeAt: tick + 1,
+    nextTiles = nextTiles.map((t) =>
+      t.q === action.from.q && t.r === action.from.r
+        ? { ...t, troops: t.troops - amount }
+        : t,
+    );
+
+    pendingMoves.push({
+      from: action.from,
+      to: action.to,
+      amount,
+      owner: action.owner,
+      resolvesAt: currentTick + 1,
     });
   });
 
-  return actions;
+  return {
+    tiles: nextTiles,
+    pendingMoves,
+    scheduledActions: scheduled.filter((a) => a.executeAt > currentTick),
+  };
 }
 
 export function getMaxTransferAmount(
@@ -318,18 +557,11 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   // 1. Scheduled → Pending
   // ------------------------------
-  const ready = scheduled.filter((a) => a.executeAt === currentTick);
-  scheduled = scheduled.filter((a) => a.executeAt > currentTick);
+  const executedActions = executeScheduledActions(tiles, scheduled, currentTick);
+  tiles = executedActions.tiles;
+  scheduled = executedActions.scheduledActions;
 
-  const newMoves: PendingMove[] = ready.map((a) => ({
-    from: a.from,
-    to: a.to,
-    amount: a.amount,
-    owner: a.owner,
-    resolvesAt: currentTick + 1,
-  }));
-
-  const combined = [...state.pendingMoves, ...newMoves];
+  const combined = [...state.pendingMoves, ...executedActions.pendingMoves];
 
   // ------------------------------
   // 2. Resolve moves
@@ -377,13 +609,25 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // 5. Automation (Player 1)
   // ------------------------------
   if (nextPlayers[1].automationEnabled) {
-    const autoActions = runAutomation(tiles, currentTick);
+    const autoActions = runAutomation(
+      tiles,
+      currentTick,
+      nextPlayers[1].supply,
+    );
 
     const validActions: ScheduledAction[] = [];
 
     autoActions.forEach((a) => {
-      if (canExecuteMove(a.owner, a.amount, nextPlayers)) {
-        nextPlayers = applyMoveCost(a.owner, a.amount, nextPlayers);
+      const cost = getAutomationMoveCost(a.amount);
+
+      if (nextPlayers[a.owner].supply >= cost) {
+        nextPlayers = {
+          ...nextPlayers,
+          [a.owner]: {
+            ...nextPlayers[a.owner],
+            supply: nextPlayers[a.owner].supply - cost,
+          },
+        };
         validActions.push(a);
       }
     });
