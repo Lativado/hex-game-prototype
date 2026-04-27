@@ -14,6 +14,18 @@ const AUTOMATION_MAX_MOVE_AMOUNT = 4;
 const AUTOMATION_SUPPLY_RESERVE = 200;
 export const SUPPLY_STOCKPILE_CAP = 200;
 const CIVILIANS_PER_SUPPLY = 20;
+const BASE_DRAFT_RATE = 0.04;
+const POPULATION_DRAFT_RATE_BONUS = 0.04;
+const BASE_CIVILIAN_GROWTH_RATE = 0.03;
+const MIN_CIVILIAN_GROWTH = 0.05;
+const BASE_CIVILIAN_CAPTURE_RETENTION = 0.65;
+const DEVASTATION_PER_CAPTURE = 0.25;
+const MAX_DEVASTATION = 1;
+const DEVASTATION_RETENTION_PENALTY = 0.5;
+const DEVASTATION_GROWTH_PENALTY = 0.7;
+const DEVASTATION_RECOVERY_PER_TICK = 0.02;
+const LOW_POPULATION_RECOVERY_CAPACITY_RATIO = 0.15;
+const LOW_POPULATION_RECOVERY_GROWTH = 0.12;
 
 const directions = [
   [1, 0],
@@ -67,6 +79,49 @@ function getTileKey(tile: Tile) {
 function getEffectiveDefense(tile: Tile) {
   const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
   return Math.floor(tile.troops * defenseMultiplier);
+}
+
+function getCivilianCapacity(tile: Tile) {
+  return Math.max(0, tile.populationCapacity - tile.troops);
+}
+
+function getCivilianCapacityRatio(tile: Tile) {
+  const civilianCapacity = getCivilianCapacity(tile);
+
+  if (civilianCapacity <= 0) return 0;
+
+  return Math.min(1, tile.civilians / civilianCapacity);
+}
+
+function getLowPopulationRecoveryGrowth(tile: Tile) {
+  const civilianCapacityRatio = getCivilianCapacityRatio(tile);
+
+  if (civilianCapacityRatio >= LOW_POPULATION_RECOVERY_CAPACITY_RATIO) return 0;
+
+  const recoveryPressure =
+    1 - civilianCapacityRatio / LOW_POPULATION_RECOVERY_CAPACITY_RATIO;
+
+  return LOW_POPULATION_RECOVERY_GROWTH * recoveryPressure;
+}
+
+function getDevastation(tile: Tile) {
+  return tile.devastation ?? 0;
+}
+
+function getCaptureCivilianRetention(devastation: number) {
+  return Math.max(
+    0.2,
+    BASE_CIVILIAN_CAPTURE_RETENTION *
+      (1 - devastation * DEVASTATION_RETENTION_PENALTY),
+  );
+}
+
+function getDevastationGrowthMultiplier(tile: Tile) {
+  return Math.max(0.2, 1 - getDevastation(tile) * DEVASTATION_GROWTH_PENALTY);
+}
+
+function recoverDevastation(tile: Tile) {
+  return Math.max(0, getDevastation(tile) - DEVASTATION_RECOVERY_PER_TICK);
 }
 
 function getGameStatus(tiles: Tile[]): GameStatus {
@@ -181,7 +236,8 @@ export function applyDraft(tiles: Tile[], draftTargetRatio: number): Tile[] {
     // If we're at/above target, do nothing (keep progress so it can finish later)
     if (troopDeficit <= 0) return t;
 
-    const draftRate = 0.05;
+    const draftRate =
+      BASE_DRAFT_RATE + getCivilianCapacityRatio(t) * POPULATION_DRAFT_RATE_BONUS;
 
     // Accumulate fractional progress
     const totalDraft = (t.draftProgress ?? 0) + t.civilians * draftRate;
@@ -245,6 +301,7 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
     let newOwner = tile.owner;
     let newTroops = tile.troops;
     let newCivilians = tile.civilians;
+    let newDevastation = getDevastation(tile);
 
     if (tile.owner === attackerOwner) {
       // Reinforcement
@@ -268,7 +325,12 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
 
     // Apply civilian loss ONCE if ownership changed from original
     if (originalOwner !== newOwner) {
-      newCivilians = tile.civilians * 0.7;
+      newDevastation = Math.min(
+        MAX_DEVASTATION,
+        newDevastation + DEVASTATION_PER_CAPTURE,
+      );
+      newCivilians =
+        tile.civilians * getCaptureCivilianRetention(newDevastation);
     }
 
     // Handle garrison limit WITHOUT silent deletion
@@ -284,6 +346,7 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
       owner: newOwner,
       troops: Math.max(0, newTroops),
       civilians: newCivilians,
+      devastation: newDevastation,
       overflowTroops: overflow,
     };
   });
@@ -593,16 +656,24 @@ export function applyCivilianGrowth(tiles: Tile[]) {
     const total = t.civilians + t.troops;
     if (total >= t.populationCapacity) return t;
 
-    const growthFactor = 1 - total / t.populationCapacity;
-    const growth = t.growthRate * growthFactor;
+    const civilianCap = getCivilianCapacity(t);
+    if (civilianCap <= 0) return t;
 
-    const civilianCap = t.populationCapacity - t.troops;
+    const housingPressure = 1 - t.civilians / civilianCap;
+    const populationGrowth =
+      t.civilians * t.growthRate * BASE_CIVILIAN_GROWTH_RATE;
+    const recoveryGrowth = getLowPopulationRecoveryGrowth(t);
+    const growth =
+      Math.max(MIN_CIVILIAN_GROWTH, recoveryGrowth, populationGrowth) *
+      housingPressure *
+      getDevastationGrowthMultiplier(t);
 
     const newCivilians = Math.min(t.civilians + growth, civilianCap);
 
     return {
       ...t,
       civilians: newCivilians > civilianCap - 0.01 ? civilianCap : newCivilians,
+      devastation: recoverDevastation(t),
     };
   });
 }

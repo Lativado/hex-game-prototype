@@ -22,6 +22,7 @@ export function generateGrid(radius: number): Tile[] {
           owner: isWater ? null : randB > 0.7 ? 1 : randC > 0.8 ? 2 : null,
           troops: isWater ? 0 : Math.floor(randB * 10),
           overflowTroops: 0,
+          devastation: 0,
           civilians: isWater ? 0 : 5,
           civilianCapacity: isWater ? 0 : 10,
           populationCapacity: isWater ? 0 : 20,

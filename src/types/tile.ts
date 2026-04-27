@@ -7,6 +7,7 @@ export type Tile = {
   troops: number;
   overflowTroops: number;
   draftProgress: number;
+  devastation: number;
   civilians: number;
   civilianCapacity: number; //Largely obsolete, leaving for now though
   populationCapacity: number;
