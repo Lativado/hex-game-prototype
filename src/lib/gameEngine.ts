@@ -14,8 +14,10 @@ const AUTOMATION_MAX_MOVE_AMOUNT = 4;
 const AUTOMATION_SUPPLY_RESERVE = 200;
 export const SUPPLY_STOCKPILE_CAP = 200;
 const CIVILIANS_PER_SUPPLY = 20;
+const MIN_SUPPLY_INCOME = 1;
 const BASE_DRAFT_RATE = 0.04;
 const POPULATION_DRAFT_RATE_BONUS = 0.04;
+const DRAFT_SUPPLY_COST_PER_TEN_PERCENT = 1;
 const BASE_CIVILIAN_GROWTH_RATE = 0.03;
 const MIN_CIVILIAN_GROWTH = 0.05;
 const BASE_CIVILIAN_CAPTURE_RETENTION = 0.65;
@@ -43,6 +45,10 @@ const directions = [
 
 export function getMoveCost(amount: number) {
   return Math.ceil(amount * 1.5);
+}
+
+export function getDraftCostPerTroop(draftTargetRatio: number) {
+  return Math.ceil(draftTargetRatio * 10 * DRAFT_SUPPLY_COST_PER_TEN_PERCENT);
 }
 
 function getMaxAffordableMoveAmount(supply: number) {
@@ -177,12 +183,20 @@ function clampPlayersSupply(players: PlayersState): PlayersState {
   };
 }
 
-function addSupplyIncome(player: PlayerState, civilians: number): PlayerState {
+function addSupplyIncome(
+  player: PlayerState,
+  civilians: number | undefined,
+): PlayerState {
+  if (civilians === undefined) return player;
+
+  const income = Math.max(
+    MIN_SUPPLY_INCOME,
+    Math.floor(civilians / CIVILIANS_PER_SUPPLY),
+  );
+
   return {
     ...player,
-    supply: clampSupply(
-      player.supply + Math.floor(civilians / CIVILIANS_PER_SUPPLY),
-    ),
+    supply: clampSupply(player.supply + income),
   };
 }
 
@@ -223,10 +237,17 @@ export function tryCreateMove(
   return intent;
 }
 
-export function applyDraft(tiles: Tile[], draftTargetRatio: number): Tile[] {
-  return tiles.map((t) => {
+function applyDraft(
+  tiles: Tile[],
+  players: PlayersState,
+): { tiles: Tile[]; players: PlayersState } {
+  let nextPlayers = players;
+
+  const draftedTiles = tiles.map((t) => {
     if (t.owner == null || t.terrain === "water") return t;
 
+    const owner = t.owner;
+    const draftTargetRatio = nextPlayers[owner].targetMilitaryRatio;
     const totalPop = t.civilians + t.troops;
     if (totalPop <= 0) return t;
 
@@ -251,16 +272,36 @@ export function applyDraft(tiles: Tile[], draftTargetRatio: number): Tile[] {
       troopDeficit,
     );
 
+    const draftCost = getDraftCostPerTroop(draftTargetRatio);
+    const affordableDraft = Math.min(
+      actualDraft,
+      Math.floor(nextPlayers[owner].supply / draftCost),
+    );
+
+    if (affordableDraft <= 0) return t;
+
     // Keep leftover fractional progress
-    const remainingDraftProgress = totalDraft - actualDraft;
+    const remainingDraftProgress = totalDraft - affordableDraft;
+    nextPlayers = {
+      ...nextPlayers,
+      [owner]: {
+        ...nextPlayers[owner],
+        supply: clampSupply(nextPlayers[owner].supply - affordableDraft * draftCost),
+      },
+    };
 
     return {
       ...t,
-      civilians: t.civilians - actualDraft,
-      troops: t.troops + actualDraft,
+      civilians: t.civilians - affordableDraft,
+      troops: t.troops + affordableDraft,
       draftProgress: remainingDraftProgress,
     };
   });
+
+  return {
+    tiles: draftedTiles,
+    players: nextPlayers,
+  };
 }
 
 function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
@@ -748,11 +789,9 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   tiles = applyCivilianGrowth(tiles);
 
-  tiles = tiles.map((t) => {
-    if (!t.owner) return t;
-    const ratio = nextPlayers[t.owner as Owner].targetMilitaryRatio;
-    return applyDraft([t], ratio)[0];
-  });
+  const draftResult = applyDraft(tiles, nextPlayers);
+  tiles = draftResult.tiles;
+  nextPlayers = draftResult.players;
 
   // ------------------------------
   // 4. Income
@@ -760,8 +799,8 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   const supplyIncomeByOwner = getSupplyIncomeByOwner(tiles);
 
   nextPlayers = {
-    1: addSupplyIncome(nextPlayers[1], supplyIncomeByOwner.get(1) ?? 0),
-    2: addSupplyIncome(nextPlayers[2], supplyIncomeByOwner.get(2) ?? 0),
+    1: addSupplyIncome(nextPlayers[1], supplyIncomeByOwner.get(1)),
+    2: addSupplyIncome(nextPlayers[2], supplyIncomeByOwner.get(2)),
   };
 
   // ------------------------------

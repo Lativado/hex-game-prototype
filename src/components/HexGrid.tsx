@@ -9,6 +9,7 @@ import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
   SUPPLY_STOCKPILE_CAP,
   clampSupply,
+  getDraftCostPerTroop,
   processTick,
   tryCreateMove,
   applyMoveCost,
@@ -136,6 +137,7 @@ function createInitialState(): HexGridState {
 export default function HexGrid() {
   const [state, setState] = useState<HexGridState>(createInitialState);
   const [selected, setSelected] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
 
   function resetGame() {
     setState(createInitialState());
@@ -144,11 +146,13 @@ export default function HexGrid() {
 
   useEffect(() => {
     const interval = setInterval(() => {
+      if (paused) return;
+
       setState((prev) => processTick(prev.gameState, prev.players));
     }, 3000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [paused]);
 
   const { gameState, players } = state;
   const { tiles, pendingMoves, status, tick } = gameState;
@@ -175,6 +179,13 @@ export default function HexGrid() {
         </button>
         <button className={BTN} onClick={resetGame} style={{ marginLeft: 10 }}>
           Reset Game
+        </button>
+        <button
+          className={BTN}
+          onClick={() => setPaused((isPaused) => !isPaused)}
+          style={{ marginLeft: 10 }}
+        >
+          {paused ? "Resume" : "Pause"}
         </button>
       </div>
       <button
@@ -216,8 +227,8 @@ export default function HexGrid() {
       )}
 
       <div style={{ marginBottom: 10 }}>
-        Player Supply: {playerSupply}/{SUPPLY_STOCKPILE_CAP} | Bot Supply:{" "}
-        {botSupply}/{SUPPLY_STOCKPILE_CAP}
+        Player Supply: ${playerSupply}/${SUPPLY_STOCKPILE_CAP} | Bot Supply: $
+        {botSupply}/${SUPPLY_STOCKPILE_CAP}
       </div>
       <div style={{ marginBottom: 10 }}>
         Tiles: Player {tileCounts.owners[1]} | Bot {tileCounts.owners[2]} |
@@ -249,7 +260,7 @@ export default function HexGrid() {
               }))
             }
           >
-            {Math.round(r * 100)}%
+            {Math.round(r * 100)}% (${getDraftCostPerTroop(r)})
           </button>
         ))}
       </div>
