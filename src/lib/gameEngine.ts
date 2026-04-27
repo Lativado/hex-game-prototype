@@ -26,6 +26,7 @@ const DEVASTATION_GROWTH_PENALTY = 0.7;
 const DEVASTATION_RECOVERY_PER_TICK = 0.02;
 const LOW_POPULATION_RECOVERY_CAPACITY_RATIO = 0.15;
 const LOW_POPULATION_RECOVERY_GROWTH = 0.12;
+const BOT_TARGET_RANDOMNESS = 1.6;
 
 const directions = [
   [1, 0],
@@ -353,21 +354,48 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
 }
 
 function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
-  const owned = tiles.filter((t) => t.owner === 2 && t.troops > 1);
-  if (!owned.length) return null;
-
-  const source = owned[Math.floor(Math.random() * owned.length)];
-
-  const neighbors = directions
-    .map(([dq, dr]) =>
-      tiles.find((t) => t.q === source.q + dq && t.r === source.r + dr),
+  const candidates = tiles
+    .filter((source) => source.owner === 2 && source.troops > 1)
+    .flatMap((source) =>
+      getLandNeighbors(tiles, source)
+        .filter((target) => target.owner !== 2)
+        .map((target) => ({ source, target })),
     )
-    .filter((t): t is Tile => !!t && t.terrain !== "water" && t.owner !== 2);
+    .filter(
+      ({ source, target }) =>
+        getMaxTransferAmount(
+          tiles,
+          { q: source.q, r: source.r },
+          { q: target.q, r: target.r },
+        ) > 0,
+    )
+    .map((candidate) => {
+      const targetDefense = getEffectiveDefense(candidate.target);
+      const playerTargetBonus = candidate.target.owner === 1 ? 2 : 0;
+      const sourceStrengthBonus = candidate.source.troops / GARRISON_LIMIT;
+      const score =
+        1 / (targetDefense + 1) + playerTargetBonus + sourceStrengthBonus;
 
-  if (!neighbors.length) return null;
+      return {
+        ...candidate,
+        weight: Math.max(0.01, score ** BOT_TARGET_RANDOMNESS),
+      };
+    });
 
-  neighbors.sort((a, b) => a.troops - b.troops);
-  const target = neighbors[0];
+  const totalWeight = candidates.reduce(
+    (total, candidate) => total + candidate.weight,
+    0,
+  );
+
+  let roll = Math.random() * totalWeight;
+  const candidate = candidates.find((candidate) => {
+    roll -= candidate.weight;
+    return roll <= 0;
+  });
+
+  if (!candidate) return null;
+
+  const { source, target } = candidate;
 
   const amount = getMaxTransferAmount(
     tiles,
