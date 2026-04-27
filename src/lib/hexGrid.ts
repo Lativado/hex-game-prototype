@@ -1,3 +1,4 @@
+import type { Tile } from "@/types/tile";
 import { seededRandom } from "./random";
 const baseSeed = 12345;
 

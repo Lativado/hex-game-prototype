@@ -1,35 +1,12 @@
 // gameEngine.ts
+import type {
+  GameState,
+  PendingMove,
+  ScheduledAction,
+  TickResult,
+} from "@/types/game";
+import type { Owner, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
-
-export type Owner = 1 | 2;
-
-export type PendingMove = {
-  from: { q: number; r: number };
-  to: { q: number; r: number };
-  amount: number;
-  owner: Owner;
-  resolvesAt: number;
-};
-
-export type ScheduledAction = {
-  id: string;
-  owner: Owner;
-  from: { q: number; r: number };
-  to: { q: number; r: number };
-  amount: number;
-  executeAt: number;
-};
-
-export type GameState = {
-  tiles: Tile[];
-  pendingMoves: PendingMove[];
-  scheduledActions: ScheduledAction[];
-  tick: number;
-  playerSupply: number;
-  botSupply: number;
-  automationEnabled: boolean;
-  targetMilitaryRatio: number;
-};
 
 const GARRISON_LIMIT = 50;
 
@@ -53,44 +30,34 @@ export function getMoveCost(amount: number) {
 export function canExecuteMove(
   owner: Owner,
   amount: number,
-  playerSupply: number,
-  botSupply: number,
-) {
+  players: PlayersState,
+): boolean {
   const cost = getMoveCost(amount);
 
-  if (owner === 1) return playerSupply >= cost;
-  if (owner === 2) return botSupply >= cost;
-
-  return false;
+  return players[owner].supply >= cost;
 }
 
 export function applyMoveCost(
   owner: Owner,
   amount: number,
-  playerSupply: number,
-  botSupply: number,
-) {
+  players: PlayersState,
+): PlayersState {
   const cost = getMoveCost(amount);
 
-  if (owner === 1) {
-    return {
-      playerSupply: playerSupply - cost,
-      botSupply,
-    };
-  }
-
   return {
-    playerSupply,
-    botSupply: botSupply - cost,
+    ...players,
+    [owner]: {
+      ...players[owner],
+      supply: players[owner].supply - cost,
+    },
   };
 }
 
 export function tryCreateMove(
   intent: PendingMove,
-  playerSupply: number,
-  botSupply: number,
-) {
-  if (!canExecuteMove(intent.owner, intent.amount, playerSupply, botSupply)) {
+  players: PlayersState,
+): PendingMove | null {
+  if (!canExecuteMove(intent.owner, intent.amount, players)) {
     return null;
   }
 
@@ -158,7 +125,7 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
     const originalOwner = tile.owner;
 
     // Sum attacks by owner
-    const attacksByOwner = new Map<number, number>();
+    const attacksByOwner = new Map<Owner, number>();
 
     groupMoves.forEach((m) => {
       attacksByOwner.set(
@@ -341,17 +308,16 @@ export function applyCivilianGrowth(tiles: Tile[]) {
 // MAIN ENGINE
 // ------------------------------
 
-export function processTick(state: GameState): GameState {
+export function processTick(state: GameState, players: PlayersState): TickResult {
   const currentTick = state.tick;
 
   let tiles = [...state.tiles];
-
-  let pendingMoves = [...state.pendingMoves];
   let scheduled = [...state.scheduledActions];
-  let playerSupply = state.playerSupply;
-  let botSupply = state.botSupply;
+  let nextPlayers = players;
 
+  // ------------------------------
   // 1. Scheduled → Pending
+  // ------------------------------
   const ready = scheduled.filter((a) => a.executeAt === currentTick);
   scheduled = scheduled.filter((a) => a.executeAt > currentTick);
 
@@ -363,18 +329,30 @@ export function processTick(state: GameState): GameState {
     resolvesAt: currentTick + 1,
   }));
 
-  const combined = [...pendingMoves, ...newMoves];
+  const combined = [...state.pendingMoves, ...newMoves];
 
-  // 2. Resolve
+  // ------------------------------
+  // 2. Resolve moves
+  // ------------------------------
   const resolving = combined.filter((m) => m.resolvesAt === currentTick);
-  const remaining = combined.filter((m) => m.resolvesAt > currentTick);
+  const nextPending = combined.filter((m) => m.resolvesAt > currentTick);
 
   tiles = resolveMoves(tiles, resolving);
 
+  // ------------------------------
+  // 3. Growth + Draft
+  // ------------------------------
   tiles = applyCivilianGrowth(tiles);
-  tiles = applyDraft(tiles, state.targetMilitaryRatio);
 
-  // 3. Income
+  tiles = tiles.map((t) => {
+    if (!t.owner) return t;
+    const ratio = nextPlayers[t.owner as Owner].targetMilitaryRatio;
+    return applyDraft([t], ratio)[0];
+  });
+
+  // ------------------------------
+  // 4. Income
+  // ------------------------------
   let playerTiles = 0;
   let botTiles = 0;
 
@@ -383,27 +361,29 @@ export function processTick(state: GameState): GameState {
     if (t.owner === 2) botTiles++;
   });
 
-  playerSupply += Math.floor(playerTiles / 2);
-  botSupply += Math.floor(botTiles / 2);
+  nextPlayers = {
+    ...nextPlayers,
+    1: {
+      ...nextPlayers[1],
+      supply: nextPlayers[1].supply + Math.floor(playerTiles / 2),
+    },
+    2: {
+      ...nextPlayers[2],
+      supply: nextPlayers[2].supply + Math.floor(botTiles / 2),
+    },
+  };
 
-  // 4. Automation
-  if (state.automationEnabled) {
+  // ------------------------------
+  // 5. Automation (Player 1)
+  // ------------------------------
+  if (nextPlayers[1].automationEnabled) {
     const autoActions = runAutomation(tiles, currentTick);
 
     const validActions: ScheduledAction[] = [];
 
     autoActions.forEach((a) => {
-      if (canExecuteMove(a.owner, a.amount, playerSupply, botSupply)) {
-        const supplies = applyMoveCost(
-          a.owner,
-          a.amount,
-          playerSupply,
-          botSupply,
-        );
-
-        playerSupply = supplies.playerSupply;
-        botSupply = supplies.botSupply;
-
+      if (canExecuteMove(a.owner, a.amount, nextPlayers)) {
+        nextPlayers = applyMoveCost(a.owner, a.amount, nextPlayers);
         validActions.push(a);
       }
     });
@@ -411,43 +391,40 @@ export function processTick(state: GameState): GameState {
     scheduled = [...scheduled, ...validActions];
   }
 
-  // 5. Bot
-  let nextPending = combined.filter((m) => m.resolvesAt > currentTick);
-
+  // ------------------------------
+  // 6. Bot move
+  // ------------------------------
   const botMove = getBotMove(tiles, currentTick);
 
+  const finalPending = [...nextPending];
+
   if (botMove) {
-    const move = tryCreateMove(botMove, playerSupply, botSupply);
+    const move = tryCreateMove(botMove, nextPlayers);
 
     if (move) {
-      const supplies = applyMoveCost(
-        move.owner,
-        move.amount,
-        playerSupply,
-        botSupply,
-      );
+      nextPlayers = applyMoveCost(move.owner, move.amount, nextPlayers);
 
-      playerSupply = supplies.playerSupply;
-      botSupply = supplies.botSupply;
-
+      // Remove troops from source immediately
       tiles = tiles.map((t) =>
         t.q === move.from.q && t.r === move.from.r
           ? { ...t, troops: t.troops - move.amount }
           : t,
       );
 
-      nextPending = [...nextPending, move];
+      finalPending.push(move);
     }
   }
 
+  // ------------------------------
+  // 7. Return new state
+  // ------------------------------
   return {
-    tiles,
-    pendingMoves: nextPending,
-    scheduledActions: scheduled,
-    tick: currentTick + 1,
-    playerSupply,
-    botSupply,
-    automationEnabled: state.automationEnabled,
-    targetMilitaryRatio: state.targetMilitaryRatio,
+    gameState: {
+      tiles,
+      pendingMoves: finalPending,
+      scheduledActions: scheduled,
+      tick: currentTick + 1,
+    },
+    players: nextPlayers,
   };
 }

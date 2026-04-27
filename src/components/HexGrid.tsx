@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { generateGrid } from "../lib/hexGrid";
-import { Tile } from "@/types/tile";
+import type { GameState } from "@/types/game";
+import type { PlayersState } from "@/types/player";
+import type { Tile } from "@/types/tile";
 import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
   processTick,
   tryCreateMove,
   applyMoveCost,
-  GameState,
 } from "../lib/gameEngine";
 
 const HEX_SIZE = 30;
@@ -42,7 +43,7 @@ function getHexPoints(x: number, y: number) {
   return points.join(" ");
 }
 
-function getColor(owner: number | null, terrain: string, troops: number) {
+function getColor(owner: number | null, terrain: string) {
   if (terrain === "water") return "#1e3a8a";
 
   if (owner === 1) return "green";
@@ -67,52 +68,60 @@ function getValidMoves(tiles: Tile[], selected: string | null): Set<string> {
   return moves;
 }
 
-export default function HexGrid() {
-  const [state, setState] = useState<GameState | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+type HexGridState = {
+  gameState: GameState;
+  players: PlayersState;
+};
 
-  function resetGame() {
-    const tiles = generateGrid(5);
+const createInitialPlayers = (): PlayersState => ({
+  1: {
+    id: 1,
+    supply: 0,
+    targetMilitaryRatio: 0.2,
+    automationEnabled: false,
+  },
+  2: {
+    id: 2,
+    supply: 0,
+    targetMilitaryRatio: 0.3,
+    automationEnabled: false,
+  },
+});
 
-    setState({
-      tiles,
+function createInitialState(): HexGridState {
+  return {
+    gameState: {
+      tiles: generateGrid(5),
       pendingMoves: [],
       scheduledActions: [],
       tick: 0,
-      playerSupply: 0,
-      botSupply: 0,
-      automationEnabled: false,
-      targetMilitaryRatio: 0.2,
-    });
+    },
+    players: createInitialPlayers(),
+  };
+}
 
+export default function HexGrid() {
+  const [state, setState] = useState<HexGridState>(createInitialState);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  function resetGame() {
+    setState(createInitialState());
     setSelected(null);
   }
 
   useEffect(() => {
-    resetGame();
-  }, []);
-
-  useEffect(() => {
-    if (!state) return;
-
     const interval = setInterval(() => {
-      setState((prev) => (prev ? processTick(prev) : prev));
+      setState((prev) => processTick(prev.gameState, prev.players));
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [state]);
+  }, []);
 
-  if (!state) return null;
+  const { gameState, players } = state;
+  const { tiles, pendingMoves, tick } = gameState;
 
-  const {
-    tiles,
-    pendingMoves,
-    tick,
-    playerSupply,
-    botSupply,
-    automationEnabled,
-    targetMilitaryRatio,
-  } = state;
+  const player = players[1];
+  const bot = players[2];
 
   const validMoves = getValidMoves(tiles, selected);
 
@@ -121,7 +130,9 @@ export default function HexGrid() {
       <div style={{ marginBottom: 10 }}>
         <button
           className={BTN}
-          onClick={() => setState((s) => (s ? processTick(s) : s))}
+          onClick={() =>
+            setState((s) => processTick(s.gameState, s.players))
+          }
         >
           Run Tick
         </button>
@@ -132,17 +143,24 @@ export default function HexGrid() {
       <button
         className={BTN}
         onClick={() =>
-          setState((s) =>
-            s ? { ...s, automationEnabled: !s.automationEnabled } : s,
-          )
+          setState((s) => ({
+            ...s,
+            players: {
+              ...s.players,
+              1: {
+                ...s.players[1],
+                automationEnabled: !s.players[1].automationEnabled,
+              },
+            },
+          }))
         }
         style={{ marginLeft: 10 }}
       >
-        Auto: {automationEnabled ? "ON" : "OFF"}
+        Auto: {player.automationEnabled ? "ON" : "OFF"}
       </button>
 
       <div style={{ marginBottom: 10 }}>
-        Player Supply: {playerSupply} | Bot Supply: {botSupply}
+        Player Supply: {player.supply} | Bot Supply: {bot.supply}
       </div>
 
       <div style={{ marginBottom: 10 }}>
@@ -153,10 +171,20 @@ export default function HexGrid() {
             className={BTN}
             style={{
               marginLeft: 6,
-              background: targetMilitaryRatio === r ? "#94a3b8" : undefined,
+              background:
+                player.targetMilitaryRatio === r ? "#94a3b8" : undefined,
             }}
             onClick={() =>
-              setState((s) => (s ? { ...s, targetMilitaryRatio: r } : s))
+              setState((s) => ({
+                ...s,
+                players: {
+                  ...s.players,
+                  1: {
+                    ...s.players[1],
+                    targetMilitaryRatio: r,
+                  },
+                },
+              }))
             }
           >
             {Math.round(r * 100)}%
@@ -182,7 +210,7 @@ export default function HexGrid() {
                     ? "orange"
                     : isValidMove
                       ? "yellow"
-                      : getColor(owner, terrain, troops)
+                      : getColor(owner, terrain)
                 }
                 stroke="black"
                 onClick={() => {
@@ -214,40 +242,32 @@ export default function HexGrid() {
 
                     if (amount <= 0) return;
 
-                    const move = tryCreateMove(
-                      {
-                        from: { q: source.q, r: source.r },
-                        to: { q, r },
-                        amount,
-                        owner: 1,
-                        resolvesAt: tick,
-                      },
-                      playerSupply,
-                      botSupply,
-                    );
-
-                    if (!move) return;
-
-                    const supplies = applyMoveCost(
-                      1,
-                      amount,
-                      playerSupply,
-                      botSupply,
-                    );
-
                     setState((prev) => {
-                      if (!prev) return prev;
+                      const move = tryCreateMove(
+                        {
+                          from: { q: source.q, r: source.r },
+                          to: { q, r },
+                          amount,
+                          owner: 1,
+                          resolvesAt: prev.gameState.tick,
+                        },
+                        prev.players,
+                      );
+
+                      if (!move) return prev;
 
                       return {
                         ...prev,
-                        playerSupply: supplies.playerSupply,
-                        botSupply: supplies.botSupply,
-                        tiles: prev.tiles.map((t) =>
-                          t.q === source.q && t.r === source.r
-                            ? { ...t, troops: t.troops - amount }
-                            : t,
-                        ),
-                        pendingMoves: [...prev.pendingMoves, move],
+                        players: applyMoveCost(1, amount, prev.players),
+                        gameState: {
+                          ...prev.gameState,
+                          tiles: prev.gameState.tiles.map((t) =>
+                            t.q === source.q && t.r === source.r
+                              ? { ...t, troops: t.troops - amount }
+                              : t,
+                          ),
+                          pendingMoves: [...prev.gameState.pendingMoves, move],
+                        },
                       };
                     });
 

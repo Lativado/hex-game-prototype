@@ -1,7 +1,9 @@
+import type { Owner } from "@/types/player";
+
 export type Tile = {
   q: number;
   r: number;
-  owner: number | null;
+  owner: Owner | null;
   troops: number;
   overflowTroops: number;
   draftProgress: number;
