@@ -7,6 +7,8 @@ import type { Owner, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
 import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
+  SUPPLY_STOCKPILE_CAP,
+  clampSupply,
   processTick,
   tryCreateMove,
   applyMoveCost,
@@ -153,6 +155,8 @@ export default function HexGrid() {
 
   const player = players[1];
   const bot = players[2];
+  const playerSupply = clampSupply(player.supply);
+  const botSupply = clampSupply(bot.supply);
   const tileCounts = getTileCounts(tiles);
 
   const validMoves = getValidMoves(tiles, selected);
@@ -212,7 +216,8 @@ export default function HexGrid() {
       )}
 
       <div style={{ marginBottom: 10 }}>
-        Player Supply: {player.supply} | Bot Supply: {bot.supply}
+        Player Supply: {playerSupply}/{SUPPLY_STOCKPILE_CAP} | Bot Supply:{" "}
+        {botSupply}/{SUPPLY_STOCKPILE_CAP}
       </div>
       <div style={{ marginBottom: 10 }}>
         Tiles: Player {tileCounts.owners[1]} | Bot {tileCounts.owners[2]} |

@@ -6,12 +6,14 @@ import type {
   ScheduledAction,
   TickResult,
 } from "@/types/game";
-import type { Owner, PlayersState } from "@/types/player";
+import type { Owner, PlayerState, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
 
 const GARRISON_LIMIT = 50;
 const AUTOMATION_MAX_MOVE_AMOUNT = 4;
 const AUTOMATION_SUPPLY_RESERVE = 200;
+export const SUPPLY_STOCKPILE_CAP = 200;
+const CIVILIANS_PER_SUPPLY = 20;
 
 const directions = [
   [1, 0],
@@ -86,6 +88,48 @@ function getGameStatus(tiles: Tile[]): GameStatus {
   };
 }
 
+function getSupplyIncomeByOwner(tiles: Tile[]) {
+  const civiliansByOwner = new Map<Owner, number>();
+
+  tiles.forEach((tile) => {
+    if (tile.owner === null || tile.terrain === "water") return;
+
+    civiliansByOwner.set(
+      tile.owner,
+      (civiliansByOwner.get(tile.owner) ?? 0) + tile.civilians,
+    );
+  });
+
+  return civiliansByOwner;
+}
+
+export function clampSupply(supply: number) {
+  return Math.max(0, Math.min(SUPPLY_STOCKPILE_CAP, supply));
+}
+
+function clampPlayerSupply(player: PlayerState): PlayerState {
+  return {
+    ...player,
+    supply: clampSupply(player.supply),
+  };
+}
+
+function clampPlayersSupply(players: PlayersState): PlayersState {
+  return {
+    1: clampPlayerSupply(players[1]),
+    2: clampPlayerSupply(players[2]),
+  };
+}
+
+function addSupplyIncome(player: PlayerState, civilians: number): PlayerState {
+  return {
+    ...player,
+    supply: clampSupply(
+      player.supply + Math.floor(civilians / CIVILIANS_PER_SUPPLY),
+    ),
+  };
+}
+
 export function canExecuteMove(
   owner: Owner,
   amount: number,
@@ -93,7 +137,7 @@ export function canExecuteMove(
 ): boolean {
   const cost = getMoveCost(amount);
 
-  return players[owner].supply >= cost;
+  return clampSupply(players[owner].supply) >= cost;
 }
 
 export function applyMoveCost(
@@ -107,7 +151,7 @@ export function applyMoveCost(
     ...players,
     [owner]: {
       ...players[owner],
-      supply: players[owner].supply - cost,
+      supply: clampSupply(players[owner].supply - cost),
     },
   };
 }
@@ -568,10 +612,12 @@ export function applyCivilianGrowth(tiles: Tile[]) {
 // ------------------------------
 
 export function processTick(state: GameState, players: PlayersState): TickResult {
+  const clampedPlayers = clampPlayersSupply(players);
+
   if (state.status.type === "won") {
     return {
       gameState: state,
-      players,
+      players: clampedPlayers,
     };
   }
 
@@ -579,7 +625,7 @@ export function processTick(state: GameState, players: PlayersState): TickResult
 
   let tiles = [...state.tiles];
   let scheduled = [...state.scheduledActions];
-  let nextPlayers = players;
+  let nextPlayers = clampedPlayers;
 
   // ------------------------------
   // 1. Scheduled → Pending
@@ -612,24 +658,11 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   // 4. Income
   // ------------------------------
-  let playerTiles = 0;
-  let botTiles = 0;
-
-  tiles.forEach((t) => {
-    if (t.owner === 1) playerTiles++;
-    if (t.owner === 2) botTiles++;
-  });
+  const supplyIncomeByOwner = getSupplyIncomeByOwner(tiles);
 
   nextPlayers = {
-    ...nextPlayers,
-    1: {
-      ...nextPlayers[1],
-      supply: nextPlayers[1].supply + Math.floor(playerTiles / 2),
-    },
-    2: {
-      ...nextPlayers[2],
-      supply: nextPlayers[2].supply + Math.floor(botTiles / 2),
-    },
+    1: addSupplyIncome(nextPlayers[1], supplyIncomeByOwner.get(1) ?? 0),
+    2: addSupplyIncome(nextPlayers[2], supplyIncomeByOwner.get(2) ?? 0),
   };
 
   // ------------------------------
@@ -652,7 +685,7 @@ export function processTick(state: GameState, players: PlayersState): TickResult
           ...nextPlayers,
           [a.owner]: {
             ...nextPlayers[a.owner],
-            supply: nextPlayers[a.owner].supply - cost,
+            supply: clampSupply(nextPlayers[a.owner].supply - cost),
           },
         };
         validActions.push(a);
