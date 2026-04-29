@@ -8,8 +8,10 @@ import type { Tile } from "@/types/tile";
 import { getMaxTransferAmount } from "@/lib/gameEngine";
 import {
   SUPPLY_STOCKPILE_CAP,
-  clampSupply,
   getDraftCostPerTroop,
+  getMoveCost,
+  getSupplyIncome,
+  getSupplyIncomeByOwner,
   processTick,
   tryCreateMove,
   applyMoveCost,
@@ -159,9 +161,10 @@ export default function HexGrid() {
 
   const player = players[1];
   const bot = players[2];
-  const playerSupply = clampSupply(player.supply);
-  const botSupply = clampSupply(bot.supply);
   const tileCounts = getTileCounts(tiles);
+  const supplyIncomeByOwner = getSupplyIncomeByOwner(tiles);
+  const playerIncome = getSupplyIncome(supplyIncomeByOwner.get(1));
+  const botIncome = getSupplyIncome(supplyIncomeByOwner.get(2));
 
   const validMoves = getValidMoves(tiles, selected);
 
@@ -227,8 +230,9 @@ export default function HexGrid() {
       )}
 
       <div style={{ marginBottom: 10 }}>
-        Player Supply: ${playerSupply}/${SUPPLY_STOCKPILE_CAP} | Bot Supply: $
-        {botSupply}/${SUPPLY_STOCKPILE_CAP}
+        Player Supply: ${player.supply}/{SUPPLY_STOCKPILE_CAP} (+$
+        {playerIncome}/tick) | Bot Supply: ${bot.supply}/{SUPPLY_STOCKPILE_CAP}{" "}
+        (+${botIncome}/tick)
       </div>
       <div style={{ marginBottom: 10 }}>
         Tiles: Player {tileCounts.owners[1]} | Bot {tileCounts.owners[2]} |
@@ -317,27 +321,59 @@ export default function HexGrid() {
                     if (amount <= 0) return;
 
                     setState((prev) => {
+                      const currentSource = prev.gameState.tiles.find(
+                        (t) => t.q === fromQ && t.r === fromR,
+                      );
+                      const currentTarget = prev.gameState.tiles.find(
+                        (t) => t.q === q && t.r === r,
+                      );
+
+                      if (
+                        !currentSource ||
+                        !currentTarget ||
+                        currentSource.owner !== 1 ||
+                        currentSource.troops <= 1
+                      ) {
+                        return prev;
+                      }
+
+                      const currentAmount = getMaxTransferAmount(
+                        prev.gameState.tiles,
+                        { q: currentSource.q, r: currentSource.r },
+                        { q: currentTarget.q, r: currentTarget.r },
+                      );
+
+                      if (currentAmount <= 0) return prev;
+
                       const move = tryCreateMove(
                         {
-                          from: { q: source.q, r: source.r },
+                          from: { q: currentSource.q, r: currentSource.r },
                           to: { q, r },
-                          amount,
+                          amount: currentAmount,
                           owner: 1,
+                          source: "manual",
                           resolvesAt: prev.gameState.tick,
                         },
                         prev.players,
                       );
 
                       if (!move) return prev;
+                      const paidPlayers = applyMoveCost(
+                        1,
+                        currentAmount,
+                        prev.players,
+                      );
+
+                      if (!paidPlayers) return prev;
 
                       return {
                         ...prev,
-                        players: applyMoveCost(1, amount, prev.players),
+                        players: paidPlayers,
                         gameState: {
                           ...prev.gameState,
                           tiles: prev.gameState.tiles.map((t) =>
-                            t.q === source.q && t.r === source.r
-                              ? { ...t, troops: t.troops - amount }
+                            t.q === currentSource.q && t.r === currentSource.r
+                              ? { ...t, troops: t.troops - currentAmount }
                               : t,
                           ),
                           pendingMoves: [...prev.gameState.pendingMoves, move],
@@ -406,7 +442,8 @@ export default function HexGrid() {
         <div>Pending: {pendingMoves.length}</div>
         {pendingMoves.map((m, i) => (
           <div key={i}>
-            {m.owner === 1 ? "P" : "B"} → ({m.from.q},{m.from.r}) → ({m.to.q},
+            {m.owner === 1 ? "P" : "B"} {m.source} x{m.amount} ($
+            {getMoveCost(m.amount)}): ({m.from.q},{m.from.r}) → ({m.to.q},
             {m.to.r}) @ {m.resolvesAt}
           </div>
         ))}

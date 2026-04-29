@@ -1,11 +1,14 @@
 import type { Tile } from "@/types/tile";
 import type { Owner, PlayersState } from "@/types/player";
 
+export type MoveSource = "manual" | "automation" | "bot" | "scheduled";
+
 export type PendingMove = {
   from: { q: number; r: number };
   to: { q: number; r: number };
   amount: number;
   owner: Owner;
+  source: MoveSource;
   resolvesAt: number;
 };
 

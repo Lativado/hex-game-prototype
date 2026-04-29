@@ -10,8 +10,8 @@ import type { Owner, PlayerState, PlayersState } from "@/types/player";
 import type { Tile } from "@/types/tile";
 
 const GARRISON_LIMIT = 50;
-const AUTOMATION_MAX_MOVE_AMOUNT = 4;
 const AUTOMATION_SUPPLY_RESERVE = 200;
+const AUTOMATION_CAP_LOGISTICS_BUDGET = 20;
 export const SUPPLY_STOCKPILE_CAP = 200;
 const CIVILIANS_PER_SUPPLY = 20;
 const MIN_SUPPLY_INCOME = 1;
@@ -51,32 +51,8 @@ export function getDraftCostPerTroop(draftTargetRatio: number) {
   return Math.ceil(draftTargetRatio * 10 * DRAFT_SUPPLY_COST_PER_TEN_PERCENT);
 }
 
-function getMaxAffordableMoveAmount(supply: number) {
-  return Math.floor(supply / 1.5);
-}
-
-function getAutomationMoveCost(amount: number) {
-  if (amount <= 1) return amount;
-
-  return getMoveCost(amount);
-}
-
-function getMaxAffordableAutomationMoveAmount(supply: number) {
-  if (supply <= 1) return supply;
-
-  return getMaxAffordableMoveAmount(supply);
-}
-
 function getDesiredAttackAmount(target: Tile) {
   return getEffectiveDefense(target) + 1;
-}
-
-function getDesiredAutomationAmount(source: Tile, target: Tile) {
-  if (target.owner !== source.owner) {
-    return getDesiredAttackAmount(target);
-  }
-
-  return Math.min(2, Math.max(0, GARRISON_LIMIT - target.troops));
 }
 
 function getTileKey(tile: Tile) {
@@ -84,8 +60,14 @@ function getTileKey(tile: Tile) {
 }
 
 function getEffectiveDefense(tile: Tile) {
+  if (tile.troops <= 0) return 0;
+
   const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
-  return Math.floor(tile.troops * defenseMultiplier);
+  return Math.max(1, Math.floor(tile.troops * defenseMultiplier));
+}
+
+function isAttackMove(source: Tile, target: Tile) {
+  return source.owner !== target.owner;
 }
 
 function getCivilianCapacity(tile: Tile) {
@@ -150,7 +132,16 @@ function getGameStatus(tiles: Tile[]): GameStatus {
   };
 }
 
-function getSupplyIncomeByOwner(tiles: Tile[]) {
+export function getSupplyIncome(civilians: number | undefined) {
+  if (civilians === undefined) return 0;
+
+  return Math.max(
+    MIN_SUPPLY_INCOME,
+    Math.floor(civilians / CIVILIANS_PER_SUPPLY),
+  );
+}
+
+export function getSupplyIncomeByOwner(tiles: Tile[]) {
   const civiliansByOwner = new Map<Owner, number>();
 
   tiles.forEach((tile) => {
@@ -169,18 +160,10 @@ export function clampSupply(supply: number) {
   return Math.max(0, Math.min(SUPPLY_STOCKPILE_CAP, supply));
 }
 
-function clampPlayerSupply(player: PlayerState): PlayerState {
-  return {
-    ...player,
-    supply: clampSupply(player.supply),
-  };
-}
+function addCappedSupply(supply: number, amount: number) {
+  if (supply >= SUPPLY_STOCKPILE_CAP) return supply;
 
-function clampPlayersSupply(players: PlayersState): PlayersState {
-  return {
-    1: clampPlayerSupply(players[1]),
-    2: clampPlayerSupply(players[2]),
-  };
+  return Math.min(SUPPLY_STOCKPILE_CAP, supply + amount);
 }
 
 function addSupplyIncome(
@@ -189,15 +172,16 @@ function addSupplyIncome(
 ): PlayerState {
   if (civilians === undefined) return player;
 
-  const income = Math.max(
-    MIN_SUPPLY_INCOME,
-    Math.floor(civilians / CIVILIANS_PER_SUPPLY),
-  );
+  const income = getSupplyIncome(civilians);
 
   return {
     ...player,
-    supply: clampSupply(player.supply + income),
+    supply: addCappedSupply(player.supply, income),
   };
+}
+
+function canAfford(supply: number, cost: number) {
+  return supply >= cost;
 }
 
 export function canExecuteMove(
@@ -207,21 +191,24 @@ export function canExecuteMove(
 ): boolean {
   const cost = getMoveCost(amount);
 
-  return clampSupply(players[owner].supply) >= cost;
+  return canAfford(players[owner].supply, cost);
 }
 
 export function applyMoveCost(
   owner: Owner,
   amount: number,
   players: PlayersState,
-): PlayersState {
+): PlayersState | null {
   const cost = getMoveCost(amount);
+  const supply = players[owner].supply;
+
+  if (!canAfford(supply, cost)) return null;
 
   return {
     ...players,
     [owner]: {
       ...players[owner],
-      supply: clampSupply(players[owner].supply - cost),
+      supply: supply - cost,
     },
   };
 }
@@ -275,7 +262,7 @@ function applyDraft(
     const draftCost = getDraftCostPerTroop(draftTargetRatio);
     const affordableDraft = Math.min(
       actualDraft,
-      Math.floor(nextPlayers[owner].supply / draftCost),
+      Math.floor(Math.max(0, nextPlayers[owner].supply) / draftCost),
     );
 
     if (affordableDraft <= 0) return t;
@@ -286,7 +273,7 @@ function applyDraft(
       ...nextPlayers,
       [owner]: {
         ...nextPlayers[owner],
-        supply: clampSupply(nextPlayers[owner].supply - affordableDraft * draftCost),
+        supply: nextPlayers[owner].supply - affordableDraft * draftCost,
       },
     };
 
@@ -349,19 +336,14 @@ function resolveMoves(tiles: Tile[], moves: PendingMove[]): Tile[] {
       // Reinforcement
       newTroops = tile.troops + attackPower;
     } else {
-      const defenseMultiplier = tile.owner === null ? 0.7 : 1.0;
-      const defense = Math.floor(tile.troops * defenseMultiplier);
+      const defense = getEffectiveDefense(tile);
+      const survivingAttackers = attackPower - defense;
 
-      if (attackPower >= defense) {
-        newTroops = attackPower - defense;
+      if (survivingAttackers > 0) {
+        newTroops = survivingAttackers;
         newOwner = attackerOwner;
       } else {
-        newTroops = tile.troops - attackPower;
-
-        if (newTroops <= 0) {
-          newTroops = 0;
-          newOwner = attackerOwner;
-        }
+        newTroops = Math.max(0, tile.troops - attackPower);
       }
     }
 
@@ -451,6 +433,7 @@ function getBotMove(tiles: Tile[], tick: number): PendingMove | null {
     to: { q: target.q, r: target.r },
     amount,
     owner: 2,
+    source: "bot",
     resolvesAt: tick + 1,
   };
 }
@@ -499,6 +482,14 @@ function getFriendlyFrontlineDistance(
   return Number.POSITIVE_INFINITY;
 }
 
+function getAutomationLogisticsReserveFloor(availableSupply: number) {
+  if (availableSupply >= SUPPLY_STOCKPILE_CAP) {
+    return Math.max(0, SUPPLY_STOCKPILE_CAP - AUTOMATION_CAP_LOGISTICS_BUDGET);
+  }
+
+  return AUTOMATION_SUPPLY_RESERVE;
+}
+
 function runAutomation(
   tiles: Tile[],
   tick: number,
@@ -518,7 +509,7 @@ function runAutomation(
     candidates.forEach(({ source, target }) => {
       const spendableSupply = remainingSupply - reserveFloor;
 
-      if (spendableSupply < getAutomationMoveCost(1)) return;
+      if (spendableSupply < getMoveCost(1)) return;
       if (usedSources.has(getTileKey(source))) return;
 
       const maxTransferAmount = getMaxTransferAmount(
@@ -526,17 +517,12 @@ function runAutomation(
         { q: source.q, r: source.r },
         { q: target.q, r: target.r },
       );
-      const maxAffordableAmount =
-        getMaxAffordableAutomationMoveAmount(spendableSupply);
-
-      const amount = Math.min(
-        maxTransferAmount,
-        maxAffordableAmount,
-        getDesiredAutomationAmount(source, target),
-        AUTOMATION_MAX_MOVE_AMOUNT,
-      );
+      const amount = maxTransferAmount;
 
       if (amount <= 0) return;
+      if (getMoveCost(amount) > spendableSupply) {
+        return;
+      }
 
       actions.push({
         id: `${source.q},${source.r}-${tick}`,
@@ -548,7 +534,7 @@ function runAutomation(
       });
 
       usedSources.add(getTileKey(source));
-      remainingSupply -= getAutomationMoveCost(amount);
+      remainingSupply -= getMoveCost(amount);
     });
   };
 
@@ -578,13 +564,13 @@ function runAutomation(
   addActions(attackCandidates);
 
   const directFrontlineReinforcementCandidates = movableTiles
-    .filter((source) => !isFrontlineTile(tiles, source, 1))
     .flatMap((source) =>
       getLandNeighbors(tiles, source)
         .filter(
           (target) =>
             target.owner === 1 &&
             target.troops < GARRISON_LIMIT &&
+            target.troops < source.troops &&
             isFrontlineTile(tiles, target, 1),
         )
         .map((target) => ({ source, target })),
@@ -598,7 +584,10 @@ function runAutomation(
 
   addActions(directFrontlineReinforcementCandidates);
 
-  if (remainingSupply < AUTOMATION_SUPPLY_RESERVE) {
+  const logisticsReserveFloor =
+    getAutomationLogisticsReserveFloor(availableSupply);
+
+  if (remainingSupply < logisticsReserveFloor) {
     return actions;
   }
 
@@ -641,7 +630,7 @@ function runAutomation(
       return targetDiff === 0 ? b.source.troops - a.source.troops : targetDiff;
     });
 
-  addActions(towardFrontReinforcementCandidates, AUTOMATION_SUPPLY_RESERVE);
+  addActions(towardFrontReinforcementCandidates, logisticsReserveFloor);
 
   return actions;
 }
@@ -650,9 +639,11 @@ function executeScheduledActions(
   tiles: Tile[],
   scheduled: ScheduledAction[],
   currentTick: number,
+  players: PlayersState,
 ) {
   const pendingMoves: PendingMove[] = [];
   let nextTiles = tiles;
+  let nextPlayers = players;
 
   scheduled.forEach((action) => {
     if (action.executeAt !== currentTick) return;
@@ -665,12 +656,27 @@ function executeScheduledActions(
       return;
     }
 
-    const amount = Math.min(
-      action.amount,
-      getMaxTransferAmount(nextTiles, action.from, action.to),
+    const target = nextTiles.find(
+      (t) => t.q === action.to.q && t.r === action.to.r,
     );
 
+    if (!target) return;
+
+    const maxTransferAmount = getMaxTransferAmount(
+      nextTiles,
+      action.from,
+      action.to,
+    );
+    const amount = isAttackMove(source, target)
+      ? maxTransferAmount
+      : Math.min(action.amount, maxTransferAmount);
+
     if (amount <= 0) return;
+    const paidPlayers = applyMoveCost(action.owner, amount, nextPlayers);
+
+    if (!paidPlayers) return;
+
+    nextPlayers = paidPlayers;
 
     nextTiles = nextTiles.map((t) =>
       t.q === action.from.q && t.r === action.from.r
@@ -683,12 +689,14 @@ function executeScheduledActions(
       to: action.to,
       amount,
       owner: action.owner,
+      source: "scheduled",
       resolvesAt: currentTick + 1,
     });
   });
 
   return {
     tiles: nextTiles,
+    players: nextPlayers,
     pendingMoves,
     scheduledActions: scheduled.filter((a) => a.executeAt > currentTick),
   };
@@ -752,12 +760,10 @@ export function applyCivilianGrowth(tiles: Tile[]) {
 // ------------------------------
 
 export function processTick(state: GameState, players: PlayersState): TickResult {
-  const clampedPlayers = clampPlayersSupply(players);
-
   if (state.status.type === "won") {
     return {
       gameState: state,
-      players: clampedPlayers,
+      players,
     };
   }
 
@@ -765,13 +771,19 @@ export function processTick(state: GameState, players: PlayersState): TickResult
 
   let tiles = [...state.tiles];
   let scheduled = [...state.scheduledActions];
-  let nextPlayers = clampedPlayers;
+  let nextPlayers = players;
 
   // ------------------------------
   // 1. Scheduled → Pending
   // ------------------------------
-  const executedActions = executeScheduledActions(tiles, scheduled, currentTick);
+  const executedActions = executeScheduledActions(
+    tiles,
+    scheduled,
+    currentTick,
+    nextPlayers,
+  );
   tiles = executedActions.tiles;
+  nextPlayers = executedActions.players;
   scheduled = executedActions.scheduledActions;
 
   const combined = [...state.pendingMoves, ...executedActions.pendingMoves];
@@ -806,6 +818,8 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   // 5. Automation (Player 1)
   // ------------------------------
+  const finalPending = [...nextPending];
+
   if (nextPlayers[1].automationEnabled) {
     const autoActions = runAutomation(
       tiles,
@@ -813,24 +827,44 @@ export function processTick(state: GameState, players: PlayersState): TickResult
       nextPlayers[1].supply,
     );
 
-    const validActions: ScheduledAction[] = [];
-
     autoActions.forEach((a) => {
-      const cost = getAutomationMoveCost(a.amount);
+      const source = tiles.find((t) => t.q === a.from.q && t.r === a.from.r);
+      const target = tiles.find((t) => t.q === a.to.q && t.r === a.to.r);
 
-      if (nextPlayers[a.owner].supply >= cost) {
-        nextPlayers = {
-          ...nextPlayers,
-          [a.owner]: {
-            ...nextPlayers[a.owner],
-            supply: clampSupply(nextPlayers[a.owner].supply - cost),
-          },
-        };
-        validActions.push(a);
+      if (!source || !target) {
+        return;
       }
-    });
 
-    scheduled = [...scheduled, ...validActions];
+      const maxTransferAmount = getMaxTransferAmount(tiles, a.from, a.to);
+      const amount = maxTransferAmount;
+
+      if (amount !== a.amount || getMoveCost(amount) > nextPlayers[a.owner].supply) {
+        return;
+      }
+
+      const paidPlayers = applyMoveCost(a.owner, amount, nextPlayers);
+
+      if (amount <= 0 || !paidPlayers) {
+        return;
+      }
+
+      nextPlayers = paidPlayers;
+
+      tiles = tiles.map((t) =>
+        t.q === a.from.q && t.r === a.from.r
+          ? { ...t, troops: t.troops - amount }
+          : t,
+      );
+
+      finalPending.push({
+        from: a.from,
+        to: a.to,
+        amount,
+        owner: a.owner,
+        source: "automation",
+        resolvesAt: currentTick + 1,
+      });
+    });
   }
 
   // ------------------------------
@@ -838,22 +872,24 @@ export function processTick(state: GameState, players: PlayersState): TickResult
   // ------------------------------
   const botMove = getBotMove(tiles, currentTick);
 
-  const finalPending = [...nextPending];
-
   if (botMove) {
     const move = tryCreateMove(botMove, nextPlayers);
 
     if (move) {
-      nextPlayers = applyMoveCost(move.owner, move.amount, nextPlayers);
+      const paidPlayers = applyMoveCost(move.owner, move.amount, nextPlayers);
 
-      // Remove troops from source immediately
-      tiles = tiles.map((t) =>
-        t.q === move.from.q && t.r === move.from.r
-          ? { ...t, troops: t.troops - move.amount }
-          : t,
-      );
+      if (paidPlayers) {
+        nextPlayers = paidPlayers;
 
-      finalPending.push(move);
+        // Remove troops from source immediately
+        tiles = tiles.map((t) =>
+          t.q === move.from.q && t.r === move.from.r
+            ? { ...t, troops: t.troops - move.amount }
+            : t,
+        );
+
+        finalPending.push(move);
+      }
     }
   }
 
